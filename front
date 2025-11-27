@@ -1,0 +1,16 @@
+import pygame
+
+
+#screen of the game
+screen = pygame.display.set_mode((1000 , 800))
+
+#title and icon
+pygame.display.set_caption("hearthstone")
+icon = pygame.image.load("Screenshot 2025-11-27 151541.png")
+pygame.display.set_icon(icon)
+runnig = True
+while runnig :
+    for event in pygame.event.get() :
+        if event.type == pygame.QUIT :
+            runnig = False
+    pygame.display.update()
