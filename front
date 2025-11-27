@@ -1,16 +1,49 @@
 import pygame
 
+pygame.init()
 
-#screen of the game
-screen = pygame.display.set_mode((1000 , 800))
+#       __________screen of the game_________
 
-#title and icon
-pygame.display.set_caption("hearthstone")
+screen = pygame.display.set_mode((800, 700))
+
+#         ________ title and icon_______
+
+pygame.display.set_caption("Hearthstone")
 icon = pygame.image.load("Screenshot 2025-11-27 151541.png")
 pygame.display.set_icon(icon)
-runnig = True
-while runnig :
-    for event in pygame.event.get() :
-        if event.type == pygame.QUIT :
-            runnig = False
+#        ______load image of Blizard______
+
+entertainment_original = pygame.image.load("./bgknowhow-main/images/icons/logo_blizzard-entertainment_small.webp")
+entertainment = pygame.transform.smoothscale(entertainment_original, (500, 250))
+simple_font = pygame.font.SysFont('Arial', 24) # adjust the font
+show_loading = True
+running = True
+
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_RETURN and show_loading:
+                show_loading = False
+    
+    if show_loading:
+
+        screen.fill((0 , 0 , 0))
+        entertainment_rect = entertainment.get_rect(center=(400, 350))
+        screen.blit(entertainment, entertainment_rect)
+
+        title_font = pygame.font.SysFont('Arial', 48)
+        #    ______adjust the press key_____
+        press_text = simple_font.render("Press ENTER to start", True, (255, 255, 255))
+        press_rect = press_text.get_rect(center=(400, 500))
+        screen.blit(press_text, press_rect)
+        
+    else:
+        game_text = simple_font.render("Game Started! Main screen will be here", True, (255, 255, 255))
+        game_rect = game_text.get_rect(center=(400, 350))
+        screen.blit(game_text, game_rect)
+    
     pygame.display.update()
+
+pygame.quit()
