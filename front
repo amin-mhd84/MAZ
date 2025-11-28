@@ -16,6 +16,8 @@ pygame.display.set_icon(icon)
 entertainment_original = pygame.image.load("./image_add/IMG_3857.PNG")
 entertainment = pygame.transform.smoothscale(entertainment_original, (600 , 400))
 simple_font = pygame.font.SysFont('Arial', 24) # adjust the font
+
+#       _______load image of loading______
 image_for_loading_orginal = pygame.image.load("./image_add/IMG_3858.PNG")
 image_for_loading = pygame.transform.smoothscale(image_for_loading_orginal , (700 , 500))
 show_loading = True
@@ -43,6 +45,7 @@ while running:
         press_rect = press_text.get_rect(center=(400, 550))
         screen.blit(press_text, press_rect)
     
+    #                ______fixing the loading page_____
     elif show_second_loading:
         
         screen.fill((0, 0, 0))
