@@ -1,5 +1,5 @@
 import pygame
-
+import time
 pygame.init()
 
 #       __________screen of the game_________
@@ -9,13 +9,15 @@ screen = pygame.display.set_mode((800, 700))
 #         ________ title and icon_______
 
 pygame.display.set_caption("Hearthstone")
-icon = pygame.image.load("Screenshot 2025-11-27 151541.png")
+icon = pygame.image.load("./image_add/Screenshot 2025-11-27 151541.png")
 pygame.display.set_icon(icon)
 #        ______load image of Blizard______
 
-entertainment_original = pygame.image.load("./bgknowhow-main/images/icons/logo_blizzard-entertainment_small.webp")
-entertainment = pygame.transform.smoothscale(entertainment_original, (500, 250))
+entertainment_original = pygame.image.load("./image_add/IMG_3857.PNG")
+entertainment = pygame.transform.smoothscale(entertainment_original, (600 , 400))
 simple_font = pygame.font.SysFont('Arial', 24) # adjust the font
+image_for_loading_orginal = pygame.image.load("./image_add/IMG_3858.PNG")
+image_for_loading = pygame.transform.smoothscale(image_for_loading_orginal , (700 , 500))
 show_loading = True
 running = True
 
@@ -26,18 +28,33 @@ while running:
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_RETURN and show_loading:
                 show_loading = False
+                show_second_loading = True
+                time_start_loading = time.time()
     
     if show_loading:
 
         screen.fill((0 , 0 , 0))
-        entertainment_rect = entertainment.get_rect(center=(400, 350))
+        entertainment_rect = entertainment.get_rect(center=(400 , 350))
         screen.blit(entertainment, entertainment_rect)
 
         title_font = pygame.font.SysFont('Arial', 48)
         #    ______adjust the press key_____
         press_text = simple_font.render("Press ENTER to start", True, (255, 255, 255))
-        press_rect = press_text.get_rect(center=(400, 500))
+        press_rect = press_text.get_rect(center=(400, 550))
         screen.blit(press_text, press_rect)
+    
+    elif show_second_loading:
+        
+        screen.fill((0, 0, 0))
+        
+
+        loading_rect = image_for_loading.get_rect(center=(400 , 300))
+        screen.blit(image_for_loading , loading_rect)
+        
+
+        loading_text = simple_font.render("Loading...", True, (255, 255, 255))
+        loading_text_rect = loading_text.get_rect(center=(400, 450))
+        screen.blit(loading_text, loading_text_rect)
         
     else:
         game_text = simple_font.render("Game Started! Main screen will be here", True, (255, 255, 255))
