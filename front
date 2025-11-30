@@ -126,7 +126,7 @@ while running:
         loading_text_rect = loading_text.get_rect(center=(400, 450))
         screen.blit(loading_text, loading_text_rect)
         
-
+        #     _____3 second for loading_____
         if time.time() - time_start_loading >= 3:
             show_second_loading = False
             show_hero_selection = True
