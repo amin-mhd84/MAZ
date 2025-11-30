@@ -1,10 +1,12 @@
 import pygame
 import time
+
+
 pygame.init()
 
 #       __________screen of the game_________
 
-screen = pygame.display.set_mode((800, 700))
+screen = pygame.display.set_mode((800 , 700))
 
 #         ________ title and icon_______
 
@@ -14,13 +16,73 @@ pygame.display.set_icon(icon)
 #        ______load image of Blizard______
 
 entertainment_original = pygame.image.load("./image_add/IMG_3857.PNG")
-entertainment = pygame.transform.smoothscale(entertainment_original, (600 , 400))
+entertainment = pygame.transform.smoothscale(entertainment_original , (600 , 400))
 simple_font = pygame.font.SysFont('Arial', 24) # adjust the font
+title_font = pygame.font.SysFont('Arial', 36)
 
 #       _______load image of loading______
 image_for_loading_orginal = pygame.image.load("./image_add/IMG_3858.PNG")
 image_for_loading = pygame.transform.smoothscale(image_for_loading_orginal , (700 , 500))
+
+#      _______first define we need_____
 show_loading = True
+show_second_loading = False
+show_hero_selection = False
+time_start_loading = 0
+selected_hero = None
+
+#       ______load HERO image______
+hero_images = {
+    "sylvanas": pygame.image.load("./bgknowhow-main/images/heroes/BG23_HERO_306_render_80.webp"),
+    "lich_king": pygame.image.load("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_22_render_80.webp"),
+    "millhouse": pygame.image.load("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_49_render_80.webp"),
+    "yogg_saron": pygame.image.load("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_35_render_80.webp")
+}
+
+#      _____func HERO____
+def show_hero_selection_screen():
+    screen.fill((30 , 30 , 60))
+    
+    selection_title = title_font.render("Choose Your Hero" , True , (255 , 215 , 0))
+    title_rect = selection_title.get_rect(center=(400 , 50))
+    screen.blit(selection_title, title_rect)
+    
+    #   _______setting for screen of the heroes
+    hero_width = 150
+    hero_height = 200
+    spacing = 50
+    start_x = 100
+    base_y = 250
+    name_y = 350
+    
+    heroes_data = [
+        {"name": "Sylvanas" , "key" : "sylvanas" , "x" : start_x},
+        {"name": "Lich King" , "key" : "lich_king" , "x" : start_x + hero_width + spacing},
+        {"name": "Millhouse" , "key" : "millhouse" , "x" : start_x + 2 * (hero_width + spacing)},
+        {"name": "Yogg-Saron" , "key" : "yogg_saron" , "x" : start_x + 3 * (hero_width + spacing)}
+    ]
+    
+    hero_rects = {}
+    #     ______ show hero _______
+    for hero in heroes_data:
+        hero_scaled = pygame.transform.smoothscale(hero_images[hero["key"]] , (hero_width , hero_height))
+        
+        hero_rect = hero_scaled.get_rect(center=(hero["x"] , base_y))
+        screen.blit(hero_scaled, hero_rect)
+        hero_rects[hero["key"]] = hero_rect
+        
+        hero_name = simple_font.render(hero["name"] , True , (255, 255, 255))
+        hero_name_rect = hero_name.get_rect(center=(hero["x"] , name_y))
+        screen.blit(hero_name, hero_name_rect)
+    
+    #      _________help note for how to choose________
+    instruction = simple_font.render("Click on a hero to select", True, (200, 200, 200))
+    instruction_rect = instruction.get_rect(center=(400, 500))
+    screen.blit(instruction, instruction_rect)
+    
+    return hero_rects
+
+hero_rects = {}
 running = True
 
 while running:
@@ -32,14 +94,22 @@ while running:
                 show_loading = False
                 show_second_loading = True
                 time_start_loading = time.time()
+        elif event.type == pygame.MOUSEBUTTONDOWN and show_hero_selection:
+            mouse_pos = pygame.mouse.get_pos()
+            
+            #      ________click with mouse ______
+            for hero_key, rect in hero_rects.items():
+                if rect.collidepoint(mouse_pos):
+                    selected_hero = hero_key
+                    print(f"{hero_key} selected!")
+                    show_hero_selection = False
+                    break
     
     if show_loading:
-
         screen.fill((0 , 0 , 0))
         entertainment_rect = entertainment.get_rect(center=(400 , 350))
         screen.blit(entertainment, entertainment_rect)
 
-        title_font = pygame.font.SysFont('Arial', 48)
         #    ______adjust the press key_____
         press_text = simple_font.render("Press ENTER to start", True, (255, 255, 255))
         press_rect = press_text.get_rect(center=(400, 550))
@@ -47,20 +117,30 @@ while running:
     
     #                ______fixing the loading page_____
     elif show_second_loading:
-        
         screen.fill((0, 0, 0))
         
-
         loading_rect = image_for_loading.get_rect(center=(400 , 300))
         screen.blit(image_for_loading , loading_rect)
         
-
         loading_text = simple_font.render("Loading...", True, (255, 255, 255))
         loading_text_rect = loading_text.get_rect(center=(400, 450))
         screen.blit(loading_text, loading_text_rect)
         
+
+        if time.time() - time_start_loading >= 3:
+            show_second_loading = False
+            show_hero_selection = True
+    
+    #                ______hero selection page_____
+    elif show_hero_selection:
+        hero_rects = show_hero_selection_screen()
+    
     else:
-        game_text = simple_font.render("Game Started! Main screen will be here", True, (255, 255, 255))
+        screen.fill((0, 0, 0))
+        if selected_hero:
+            game_text = simple_font.render(f"Game Started! Selected Hero: {selected_hero}", True, (255, 255, 255))
+        else:
+            game_text = simple_font.render("Game Started! Main screen will be here", True, (255, 255, 255))
         game_rect = game_text.get_rect(center=(400, 350))
         screen.blit(game_text, game_rect)
     
