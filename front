@@ -3,7 +3,7 @@ import time
 
 
 pygame.init()
-
+#MAZ
 #       __________screen of the game_________
 
 screen = pygame.display.set_mode((800 , 700))
