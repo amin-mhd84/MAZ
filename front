@@ -1,6 +1,9 @@
 import pygame
 import time
 
+# import کلاس‌های هیروها
+from S_L_Hero import Sylvanas
+from S_L_Hero import LichKing
 
 pygame.init()
 #MAZ
@@ -30,6 +33,9 @@ show_second_loading = False
 show_hero_selection = False
 time_start_loading = 0
 selected_hero = None
+game_started = False
+current_hero_instance = None  # برای ذخیره نمونه هیرو انتخاب شده
+player_gold = 3  # طلای اولیه بازیکن
 
 #       ______load HERO image______
 hero_images = {
@@ -82,6 +88,41 @@ def show_hero_selection_screen():
     
     return hero_rects
 
+#      _____func for show Hero Details_____
+def show_hero_details():
+    screen.fill((40, 40, 70))
+    
+
+    title = title_font.render(f"{current_hero_instance.name} - Selected", True, (255, 215, 0))
+    title_rect = title.get_rect(center=(400, 50))
+    screen.blit(title, title_rect)
+    
+
+    current_hero_instance.x = 100
+    current_hero_instance.y = 150
+    current_hero_instance.draw()
+    
+    
+    gold_text = title_font.render(f"Gold: {player_gold}", True, (255, 215, 0))
+    gold_rect = gold_text.get_rect(center=(400, 500))
+    screen.blit(gold_text, gold_rect)
+    
+    
+    instruction = simple_font.render("Press SPACE to use Hero Power", True, (200, 200, 100))
+    instruction_rect = instruction.get_rect(center=(400, 550))
+    screen.blit(instruction, instruction_rect)
+    
+    
+    if selected_hero == "lich_king":
+        target_info = simple_font.render("Hero Power requires a target minion", True, (150, 200, 255))
+        target_rect = target_info.get_rect(center=(400, 580))
+        screen.blit(target_info, target_rect)
+    
+    
+    back_instruction = simple_font.render("Press ESC to return to main menu", True, (200, 200, 200))
+    back_rect = back_instruction.get_rect(center=(400, 620))
+    screen.blit(back_instruction, back_rect)
+
 hero_rects = {}
 running = True
 
@@ -89,11 +130,29 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+        
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_RETURN and show_loading:
                 show_loading = False
                 show_second_loading = True
                 time_start_loading = time.time()
+            
+            
+            elif event.key == pygame.K_SPACE and current_hero_instance:
+                if selected_hero == "sylvanas":
+                    player_gold = current_hero_instance.use_hero_power(player_gold)
+                    print(f"Remaining Gold: {player_gold}")
+                
+                elif selected_hero == "lich_king":
+                    player_gold = current_hero_instance.use_hero_power(player_gold, "Friendly Minion")
+                    print(f"Remaining Gold: {player_gold}")
+            
+            
+            elif event.key == pygame.K_ESCAPE and current_hero_instance:
+                current_hero_instance = None
+                selected_hero = None
+                show_hero_selection = True
+        
         elif event.type == pygame.MOUSEBUTTONDOWN and show_hero_selection:
             mouse_pos = pygame.mouse.get_pos()
             
@@ -102,6 +161,14 @@ while running:
                 if rect.collidepoint(mouse_pos):
                     selected_hero = hero_key
                     print(f"{hero_key} selected!")
+                    
+                    
+                    if hero_key == "sylvanas":
+                        current_hero_instance = Sylvanas(screen, 0, 0)
+                    elif hero_key == "lich_king":
+                        current_hero_instance = LichKing(screen, 0, 0)
+
+                    
                     show_hero_selection = False
                     break
     
@@ -134,6 +201,10 @@ while running:
     #                ______hero selection page_____
     elif show_hero_selection:
         hero_rects = show_hero_selection_screen()
+    
+    #                ______show selected hero details______
+    elif selected_hero and current_hero_instance:
+        show_hero_details()
     
     else:
         screen.fill((0, 0, 0))
