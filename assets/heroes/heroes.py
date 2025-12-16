@@ -1,7 +1,7 @@
 import pygame
 import random
 class Sylvanas :
-    def init(self , screen , x , y) :
+    def __init__(self , screen , x , y) :
         self.screen = screen
         self.x = x
         self.y = y
@@ -37,7 +37,7 @@ class Sylvanas :
 
 
 class LichKing:
-    def init(self, screen, x, y):
+    def __init__(self, screen, x, y):
         self.screen = screen
         self.x = x
         self.y = y

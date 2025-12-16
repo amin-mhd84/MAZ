@@ -25,6 +25,10 @@ entertainment = pygame.transform.smoothscale(entertainment_original , (600 , 400
 image_for_loading_original = pygame.image.load("./image_add/IMG_3858.PNG")
 image_for_loading = pygame.transform.smoothscale(image_for_loading_original , (700 , 500))
 
+# --------- background image ---------
+game_bg_original = pygame.image.load(r"D:\MAZ\MAZ\image_add\Screenshot 2025-12-16 175133.png")
+game_bg = pygame.transform.scale(game_bg_original, (800, 700))  
+
 # --------- game state ---------
 show_loading = True
 show_second_loading = False
@@ -34,16 +38,83 @@ selected_hero = None
 hero_rects = {}
 running = True
 
+# --------- sample game state for first phase ---------
+player_state = {
+    "Exir": 3,
+    "board": [],  
+    "hand": [],  
+    "shop": []  
+}
+
+# --------- Turn system ---------
+current_turn = 0
+turn_cards_queue = ["Alleycat", "Murloc Tidehunter", "Rockpool Hunter", "Selfless Hero"]
+
+def next_turn():
+    global current_turn
+    current_turn += 1
+
+    if turn_cards_queue:
+        next_card = turn_cards_queue.pop(0)
+        player_state["hand"].append(next_card)
+        print(f"Turn {current_turn}: {next_card} added to hand!")
+
+def draw_game_board(screen, font, state, selected_hero=None):
+    screen.blit(game_bg, (0, 0)) 
+
+    # --- Board ---
+    for i, minion in enumerate(state["board"]):
+        rect = pygame.Rect(50 + i*100, 250, 80, 100)
+        pygame.draw.rect(screen, (50, 50, 50), rect)  
+        if minion:
+            text = font.render(minion, True, (255, 255, 255))
+            screen.blit(text, (rect.x+5, rect.y+40))
+
+    # --- Hand ---
+    for i, card in enumerate(state["hand"]):
+        rect = pygame.Rect(50 + i*70, 500, 60, 90)
+        pygame.draw.rect(screen, (80, 80, 80), rect)
+        text = font.render(card, True, (255, 255, 255))
+        screen.blit(text, (rect.x+5, rect.y+35))
+
+    # --- Shop ---
+    for i, card in enumerate(state["shop"]):
+        rect = pygame.Rect(50 + i*100, 50, 80, 100)
+        pygame.draw.rect(screen, (100, 50, 50), rect)
+        text = font.render(card, True, (255, 255, 255))
+        screen.blit(text, (rect.x+5, rect.y+40))
+
+    # --- Exir display ---
+    Exir_text = font.render(f"Exir: {state['Exir']}", True, (255, 255, 0))
+    screen.blit(Exir_text, (650, 10))
+
+    # --- Hero image ---
+    if selected_hero:
+        hero_img = hero_images[selected_hero]
+        hero_img_small = pygame.transform.scale(hero_img, (120, 177))  # سایز کوچک برای پایین صفحه
+        hero_rect = hero_img_small.get_rect()
+        hero_rect.bottomleft = (316, 630)  
+        screen.blit(hero_img_small, hero_rect)
+
+
 # --------- main loop ---------
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_RETURN and show_loading:
-                show_loading = False
-                show_second_loading = True
-                time_start_loading = time.time()
+            if event.key == pygame.K_RETURN:
+                if show_loading:
+                    show_loading = False
+                    show_second_loading = True
+                    time_start_loading = time.time()
+                elif show_second_loading:
+                    pass  
+                elif show_hero_selection:
+                    pass
+                else:
+                    next_turn()
+
         elif event.type == pygame.MOUSEBUTTONDOWN and show_hero_selection:
             mouse_pos = pygame.mouse.get_pos()
             for hero_key, rect in hero_rects.items():
@@ -80,13 +151,8 @@ while running:
         hero_rects = show_hero_selection_screen(screen, simple_font, title_font)
     
     else:
-        screen.fill((0, 0, 0))
-        if selected_hero:
-            game_text = simple_font.render(f"Game Started! Selected Hero: {selected_hero}", True, (255, 255, 255))
-        else:
-            game_text = simple_font.render("Game Started! Main screen will be here", True, (255, 255, 255))
-        game_rect = game_text.get_rect(center=(400, 350))
-        screen.blit(game_text, game_rect)
+        draw_game_board(screen, simple_font, player_state, selected_hero)
+
     
     pygame.display.update()
 
