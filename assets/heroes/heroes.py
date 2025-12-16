@@ -186,4 +186,4 @@ class YoggSaron:
             self.current_tavern_tier += 1
             print(f"{self.name} upgraded to Tavern Tier {self.current_tavern_tier}!")
         else:
-            print("Already at maximum Tavern Tier!")
+            print("Already at maximum Tavern Tier!") 
