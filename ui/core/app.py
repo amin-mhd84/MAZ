@@ -23,7 +23,7 @@ loading_img = pygame.transform.smoothscale(
     pygame.image.load("./image_add/IMG_3858.PNG"), (700, 500)
 )
 game_bg = pygame.transform.scale(
-    pygame.image.load(r"C:\Users\Rayanegostar\Downloads\hearthstone_project\MAZ\image_add\Screenshot 2025-12-16 175133.png"),
+    pygame.image.load(r"./image_add/Screenshot 2025-12-16 175133.png"),
     (800, 700)
 )
 
