@@ -1,220 +1,816 @@
+# MAW Battlegrounds - Lightweight Frontend
+# Optimized for performance, complete single-file implementation
+
 import pygame
-import time
+import sys
+import json
+import os
+from typing import List, Dict, Optional, Tuple
 
-# import کلاس‌های هیروها
-from S_L_Hero import Sylvanas
-from S_L_Hero import LichKing
-
+# ==================== INITIALIZATION ====================
 pygame.init()
-#MAZ
-#       __________screen of the game_________
 
-screen = pygame.display.set_mode((800 , 700))
+# Optimized screen dimensions for better performance
+SCREEN_WIDTH = 1024  # Reduced from 1400
+SCREEN_HEIGHT = 768  # Reduced from 900
+CARD_WIDTH = 100     # Reduced from 120
+CARD_HEIGHT = 140    # Reduced from 160
 
-#         ________ title and icon_______
+# Game constants
+SHOP_SLOTS = 5
+HAND_SLOTS = 10
+BOARD_SLOTS = 7
+START_GOLD = 3
+MAX_GOLD = 10
+TURN_DURATION = 30.0
 
-pygame.display.set_caption("Hearthstone")
-icon = pygame.image.load("./image_add/Screenshot 2025-11-27 151541.png")
-pygame.display.set_icon(icon)
-#        ______load image of Blizard______
-
-entertainment_original = pygame.image.load("./image_add/IMG_3857.PNG")
-entertainment = pygame.transform.smoothscale(entertainment_original , (600 , 400))
-simple_font = pygame.font.SysFont('Arial', 24) # adjust the font
-title_font = pygame.font.SysFont('Arial', 36)
-
-#       _______load image of loading______
-image_for_loading_orginal = pygame.image.load("./image_add/IMG_3858.PNG")
-image_for_loading = pygame.transform.smoothscale(image_for_loading_orginal , (700 , 500))
-
-#      _______first define we need_____
-show_loading = True
-show_second_loading = False
-show_hero_selection = False
-time_start_loading = 0
-selected_hero = None
-game_started = False
-current_hero_instance = None  # برای ذخیره نمونه هیرو انتخاب شده
-player_gold = 3  # طلای اولیه بازیکن
-
-#       ______load HERO image______
-hero_images = {
-    "sylvanas": pygame.image.load("./bgknowhow-main/images/heroes/BG23_HERO_306_render_80.webp"),
-    "lich_king": pygame.image.load("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_22_render_80.webp"),
-    "millhouse": pygame.image.load("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_49_render_80.webp"),
-    "yogg_saron": pygame.image.load("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_35_render_80.webp")
+# Optimized color palette (fewer colors for performance)
+COLORS = {
+    "bg": (15, 20, 35),
+    "card_bg": (40, 50, 75),
+    "card_border": (80, 130, 200),
+    "gold": (255, 215, 0),
+    "health": (255, 80, 80),
+    "text": (230, 230, 230),
+    "shop": (100, 180, 255),
+    "hand": (100, 220, 150),
+    "board": (220, 160, 100),
+    "button": (70, 130, 180),
+    "button_hover": (90, 160, 220),
+    "taunt": (180, 140, 60),
+    "divine_shield": (180, 220, 255),
+    "reborn": (200, 100, 200),
+    "error": (255, 100, 100),
+    "success": (100, 220, 100),
 }
 
-#      _____func HERO____
-def show_hero_selection_screen():
-    screen.fill((30 , 30 , 60))
+# Simple font initialization - fewer font sizes
+pygame.font.init()
+FONT_TITLE = pygame.font.SysFont(None, 36)   # Reduced from 48
+FONT_NORMAL = pygame.font.SysFont(None, 24)
+FONT_SMALL = pygame.font.SysFont(None, 18)
+
+# ==================== CARD CLASS ====================
+class Card:
+    """Represents a game card with optimized rendering"""
     
-    selection_title = title_font.render("Choose Your Hero" , True , (255 , 215 , 0))
-    title_rect = selection_title.get_rect(center=(400 , 50))
-    screen.blit(selection_title, title_rect)
-    
-    #   _______setting for screen of the heroes
-    hero_width = 150
-    hero_height = 200
-    spacing = 50
-    start_x = 100
-    base_y = 250
-    name_y = 350
-    
-    heroes_data = [
-        {"name": "Sylvanas" , "key" : "sylvanas" , "x" : start_x},
-        {"name": "Lich King" , "key" : "lich_king" , "x" : start_x + hero_width + spacing},
-        {"name": "Millhouse" , "key" : "millhouse" , "x" : start_x + 2 * (hero_width + spacing)},
-        {"name": "Yogg-Saron" , "key" : "yogg_saron" , "x" : start_x + 3 * (hero_width + spacing)}
-    ]
-    
-    hero_rects = {}
-    #     ______ show hero _______
-    for hero in heroes_data:
-        hero_scaled = pygame.transform.smoothscale(hero_images[hero["key"]] , (hero_width , hero_height))
+    def __init__(self, data: Dict):
+        self.card_id = data.get("card_id", "UNKNOWN")
+        self.name = data.get("name", "Unknown")
+        self.attack = data.get("attack", 1)
+        self.health = data.get("health", 1)
+        self.tier = data.get("tier", 1)
+        self.cost = data.get("cost", 3)
+        self.instance_id = data.get("instance_id", f"inst_{id(self)}")
+        self.is_golden = data.get("is_golden", False)
+        self.keywords = data.get("keywords", [])
+        self.has_divine_shield = data.get("has_divine_shield", False)
         
-        hero_rect = hero_scaled.get_rect(center=(hero["x"] , base_y))
-        screen.blit(hero_scaled, hero_rect)
-        hero_rects[hero["key"]] = hero_rect
+        # Display properties
+        self.x = 0
+        self.y = 0
+        self.width = CARD_WIDTH
+        self.height = CARD_HEIGHT
+        self.is_dragging = False
+        self.drag_offset = (0, 0)
         
-        hero_name = simple_font.render(hero["name"] , True , (255, 255, 255))
-        hero_name_rect = hero_name.get_rect(center=(hero["x"] , name_y))
-        screen.blit(hero_name, hero_name_rect)
+        # Pre-calculate color for performance
+        self.color = self._calculate_color()
     
-    #      _________help note for how to choose________
-    instruction = simple_font.render("Click on a hero to select", True, (200, 200, 200))
-    instruction_rect = instruction.get_rect(center=(400, 500))
-    screen.blit(instruction, instruction_rect)
+    def _calculate_color(self):
+        """Calculate card color based on tier (optimized)"""
+        tier_colors = [
+            (100, 100, 100),  # Tier 0
+            (80, 150, 80),    # Tier 1
+            (80, 150, 200),   # Tier 2
+            (180, 120, 220),  # Tier 3
+            (220, 160, 60),   # Tier 4
+            (220, 80, 80),    # Tier 5
+        ]
+        tier_idx = min(self.tier, len(tier_colors) - 1)
+        return (255, 215, 0) if self.is_golden else tier_colors[tier_idx]
     
-    return hero_rects
-
-#      _____func for show Hero Details_____
-def show_hero_details():
-    screen.fill((40, 40, 70))
+    def contains_point(self, point: Tuple[int, int]) -> bool:
+        """Check if point is inside card (optimized)"""
+        return (self.x <= point[0] <= self.x + self.width and 
+                self.y <= point[1] <= self.y + self.height)
     
-
-    title = title_font.render(f"{current_hero_instance.name} - Selected", True, (255, 215, 0))
-    title_rect = title.get_rect(center=(400, 50))
-    screen.blit(title, title_rect)
+    def start_drag(self, mouse_pos: Tuple[int, int]):
+        """Start dragging the card"""
+        self.is_dragging = True
+        self.drag_offset = (mouse_pos[0] - self.x, mouse_pos[1] - self.y)
     
-
-    current_hero_instance.x = 100
-    current_hero_instance.y = 150
-    current_hero_instance.draw()
+    def update_drag(self, mouse_pos: Tuple[int, int]):
+        """Update card position during drag"""
+        if self.is_dragging:
+            self.x = mouse_pos[0] - self.drag_offset[0]
+            self.y = mouse_pos[1] - self.drag_offset[1]
     
+    def stop_drag(self):
+        """Stop dragging the card"""
+        self.is_dragging = False
     
-    gold_text = title_font.render(f"Gold: {player_gold}", True, (255, 215, 0))
-    gold_rect = gold_text.get_rect(center=(400, 500))
-    screen.blit(gold_text, gold_rect)
-    
-    
-    instruction = simple_font.render("Press SPACE to use Hero Power", True, (200, 200, 100))
-    instruction_rect = instruction.get_rect(center=(400, 550))
-    screen.blit(instruction, instruction_rect)
-    
-    
-    if selected_hero == "lich_king":
-        target_info = simple_font.render("Hero Power requires a target minion", True, (150, 200, 255))
-        target_rect = target_info.get_rect(center=(400, 580))
-        screen.blit(target_info, target_rect)
-    
-    
-    back_instruction = simple_font.render("Press ESC to return to main menu", True, (200, 200, 200))
-    back_rect = back_instruction.get_rect(center=(400, 620))
-    screen.blit(back_instruction, back_rect)
-
-hero_rects = {}
-running = True
-
-while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+    def draw(self, surface: pygame.Surface, x: int, y: int, show_cost: bool = False):
+        """Draw the card with optimized rendering"""
+        self.x, self.y = x, y
         
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_RETURN and show_loading:
-                show_loading = False
-                show_second_loading = True
-                time_start_loading = time.time()
+        # Draw card background (simplified)
+        card_rect = pygame.Rect(x, y, self.width, self.height)
+        pygame.draw.rect(surface, self.color, card_rect, border_radius=8)
+        pygame.draw.rect(surface, COLORS["card_border"], card_rect, 2, border_radius=8)
+        
+        # Card name (truncated)
+        name = self.name[:12] + "..." if len(self.name) > 12 else self.name
+        name_text = FONT_SMALL.render(name, True, COLORS["text"])
+        surface.blit(name_text, (x + 5, y + 5))
+        
+        # Attack value (simplified)
+        attack_text = FONT_NORMAL.render(str(self.attack), True, (255, 255, 255))
+        attack_bg = pygame.Rect(x + 5, y + self.height - 30, 25, 25)
+        pygame.draw.rect(surface, COLORS["health"], attack_bg, border_radius=12)
+        surface.blit(attack_text, (x + 10, y + self.height - 27))
+        
+        # Health value (simplified)
+        health_text = FONT_NORMAL.render(str(self.health), True, (255, 255, 255))
+        health_bg = pygame.Rect(x + self.width - 30, y + self.height - 30, 25, 25)
+        pygame.draw.rect(surface, (80, 200, 80), health_bg, border_radius=12)
+        surface.blit(health_text, (x + self.width - 25, y + self.height - 27))
+        
+        # Keywords (limited to 2 for performance)
+        y_offset = y + 35
+        for keyword in self.keywords[:2]:
+            if keyword == "Taunt":
+                color = COLORS["taunt"]
+            elif keyword == "Divine Shield":
+                color = COLORS["divine_shield"]
+            elif keyword == "Reborn":
+                color = COLORS["reborn"]
+            else:
+                color = (180, 180, 180)
             
-            
-            elif event.key == pygame.K_SPACE and current_hero_instance:
-                if selected_hero == "sylvanas":
-                    player_gold = current_hero_instance.use_hero_power(player_gold)
-                    print(f"Remaining Gold: {player_gold}")
-                
-                elif selected_hero == "lich_king":
-                    player_gold = current_hero_instance.use_hero_power(player_gold, "Friendly Minion")
-                    print(f"Remaining Gold: {player_gold}")
-            
-            
-            elif event.key == pygame.K_ESCAPE and current_hero_instance:
-                current_hero_instance = None
-                selected_hero = None
-                show_hero_selection = True
+            # Simplified keyword display
+            kw_text = FONT_SMALL.render(keyword[:8], True, color)
+            surface.blit(kw_text, (x + 5, y_offset))
+            y_offset += 18
         
-        elif event.type == pygame.MOUSEBUTTONDOWN and show_hero_selection:
-            mouse_pos = pygame.mouse.get_pos()
-            
-            #      ________click with mouse ______
-            for hero_key, rect in hero_rects.items():
-                if rect.collidepoint(mouse_pos):
-                    selected_hero = hero_key
-                    print(f"{hero_key} selected!")
-                    
-                    
-                    if hero_key == "sylvanas":
-                        current_hero_instance = Sylvanas(screen, 0, 0)
-                    elif hero_key == "lich_king":
-                        current_hero_instance = LichKing(screen, 0, 0)
+        # Divine Shield indicator
+        if self.has_divine_shield:
+            shield_text = FONT_SMALL.render("S", True, COLORS["divine_shield"])
+            surface.blit(shield_text, (x + self.width - 15, y + 5))
+        
+        # Cost (only for shop cards)
+        if show_cost:
+            cost_text = FONT_NORMAL.render(str(self.cost), True, COLORS["gold"])
+            surface.blit(cost_text, (x + self.width - 25, y + 5))
 
-                    
-                    show_hero_selection = False
-                    break
+# ==================== PLAYER CLASS ====================
+class Player:
+    """Represents a player with game state"""
     
-    if show_loading:
-        screen.fill((0 , 0 , 0))
-        entertainment_rect = entertainment.get_rect(center=(400 , 350))
-        screen.blit(entertainment, entertainment_rect)
-
-        #    ______adjust the press key_____
-        press_text = simple_font.render("Press ENTER to start", True, (255, 255, 255))
-        press_rect = press_text.get_rect(center=(400, 550))
-        screen.blit(press_text, press_rect)
-    
-    #                ______fixing the loading page_____
-    elif show_second_loading:
-        screen.fill((0, 0, 0))
+    def __init__(self, data: Dict):
+        self.player_id = data.get("player_id", "p1")
         
-        loading_rect = image_for_loading.get_rect(center=(400 , 300))
-        screen.blit(image_for_loading , loading_rect)
-        
-        loading_text = simple_font.render("Loading...", True, (255, 255, 255))
-        loading_text_rect = loading_text.get_rect(center=(400, 450))
-        screen.blit(loading_text, loading_text_rect)
-        
-        #     _____3 second for loading_____
-        if time.time() - time_start_loading >= 3:
-            show_second_loading = False
-            show_hero_selection = True
-    
-    #                ______hero selection page_____
-    elif show_hero_selection:
-        hero_rects = show_hero_selection_screen()
-    
-    #                ______show selected hero details______
-    elif selected_hero and current_hero_instance:
-        show_hero_details()
-    
-    else:
-        screen.fill((0, 0, 0))
-        if selected_hero:
-            game_text = simple_font.render(f"Game Started! Selected Hero: {selected_hero}", True, (255, 255, 255))
+        # Handle hero data (could be string or dict)
+        hero_data = data.get("hero", {})
+        if isinstance(hero_data, dict):
+            self.hero_name = hero_data.get("name", "Sylvanas")
+            self.health = hero_data.get("health", 40)
+            self.hero_power_cost = hero_data.get("hero_power_cost", 1)
+            self.hero_power_used = hero_data.get("hero_power_used", False)
         else:
-            game_text = simple_font.render("Game Started! Main screen will be here", True, (255, 255, 255))
-        game_rect = game_text.get_rect(center=(400, 350))
-        screen.blit(game_text, game_rect)
+            self.hero_name = str(hero_data)
+            self.health = data.get("health", 40)
+            self.hero_power_cost = 1
+            self.hero_power_used = False
+        
+        self.gold = data.get("gold", START_GOLD)
+        self.tavern_tier = data.get("tavern_tier", 1)
+        
+        # Parse cards
+        self.shop = self._parse_cards(data.get("shop", []), is_shop=True)
+        self.hand = self._parse_cards(data.get("hand", []))
+        self.board = self._parse_cards(data.get("board", []))
+        
+        # Flags
+        self.shop_frozen = data.get("flags", {}).get("shop_frozen", False)
+        
+        # Display positions (optimized layout)
+        self.shop_pos = (30, 120)
+        self.hand_pos = (30, 500)
+        self.board_pos = (400, 300)
     
-    pygame.display.update()
+    def _parse_cards(self, card_list: List, is_shop: bool = False) -> List:
+        """Parse card data into Card objects"""
+        cards = []
+        for item in card_list:
+            if item:  # Not empty/None
+                cards.append(Card(item))
+            elif is_shop:
+                cards.append(None)  # Empty shop slot
+        return cards
 
-pygame.quit()
+# ==================== BUTTON CLASS ====================
+class Button:
+    """Simple UI button with hover effect"""
+    
+    def __init__(self, x: int, y: int, width: int, height: int, 
+                 text: str, action: str = ""):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.text = text
+        self.action = action
+        self.is_hovered = False
+        self.enabled = True
+    
+    def draw(self, surface: pygame.Surface):
+        """Draw the button"""
+        color = COLORS["button_hover"] if self.is_hovered else COLORS["button"]
+        if not self.enabled:
+            color = (100, 100, 120)  # Disabled color
+        
+        pygame.draw.rect(surface, color, self.rect, border_radius=6)
+        pygame.draw.rect(surface, (255, 255, 255), self.rect, 1, border_radius=6)
+        
+        # Button text
+        text_color = (255, 255, 255) if self.enabled else (150, 150, 150)
+        text_surf = FONT_NORMAL.render(self.text, True, text_color)
+        text_rect = text_surf.get_rect(center=self.rect.center)
+        surface.blit(text_surf, text_rect)
+    
+    def check_hover(self, mouse_pos: Tuple[int, int]) -> bool:
+        """Check if mouse is hovering over button"""
+        self.is_hovered = self.rect.collidepoint(mouse_pos) and self.enabled
+        return self.is_hovered
+
+# ==================== TIMER CLASS ====================
+class Timer:
+    """Game phase timer with grace period"""
+    
+    def __init__(self, x: int, y: int):
+        self.x = x
+        self.y = y
+        self.time_left = TURN_DURATION
+        self.grace_time = 2.0
+        self.in_grace = False
+        self.active = True
+    
+    def update(self, dt: float):
+        """Update timer with delta time"""
+        if not self.active:
+            return
+            
+        if self.time_left > 0:
+            self.time_left -= dt
+        elif not self.in_grace:
+            self.in_grace = True
+            self.grace_time = 2.0
+        elif self.in_grace:
+            self.grace_time -= dt
+            if self.grace_time <= 0:
+                self.active = False
+    
+    def draw(self, surface: pygame.Surface):
+        """Draw timer visualization"""
+        bar_width = 250
+        bar_height = 20
+        
+        # Background
+        bg_rect = pygame.Rect(self.x, self.y, bar_width, bar_height)
+        pygame.draw.rect(surface, (40, 50, 70), bg_rect, border_radius=3)
+        
+        # Progress
+        if self.in_grace:
+            progress = self.grace_time / 2.0
+            color = (255, 200, 50)  # Yellow for grace
+            label = "GRACE"
+        else:
+            progress = self.time_left / TURN_DURATION
+            if progress > 0.5:
+                color = (80, 200, 100)  # Green
+            elif progress > 0.2:
+                color = (255, 200, 50)  # Yellow
+            else:
+                color = (255, 80, 80)   # Red
+            label = "RECRUIT"
+        
+        fill_width = int(bar_width * progress)
+        fill_rect = pygame.Rect(self.x, self.y, fill_width, bar_height)
+        pygame.draw.rect(surface, color, fill_rect, border_radius=3)
+        
+        # Border and text
+        pygame.draw.rect(surface, (180, 180, 200), bg_rect, 1, border_radius=3)
+        
+        time_text = f"{label}: {self.grace_time:.1f}s" if self.in_grace else f"{label}: {self.time_left:.1f}s"
+        text_surf = FONT_SMALL.render(time_text, True, (255, 255, 255))
+        text_rect = text_surf.get_rect(center=bg_rect.center)
+        surface.blit(text_surf, text_rect)
+
+# ==================== GAME CLIENT CLASS ====================
+class GameClient:
+    """Main game client with optimized rendering"""
+    
+    def __init__(self):
+        # Initialize PyGame with safe settings
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        pygame.display.set_caption("MAW Battlegrounds - Lightweight")
+        
+        self.clock = pygame.time.Clock()
+        self.running = True
+        self.offline_mode = True
+        
+        # Game state
+        self.phase = "RECRUIT"
+        self.players = self._load_game_data()
+        self.current_player = self.players[0] if self.players else None
+        
+        # UI elements
+        self.timer = Timer(SCREEN_WIDTH - 280, 20)
+        self.buttons = self._create_buttons()
+        
+        # Drag and drop
+        self.dragging_card = None
+        self.drag_source = ""  # "shop", "hand", "board"
+        
+        # Event log (simplified)
+        self.log = [
+            "Game started in lightweight mode",
+            "Drag cards to interact",
+            "Right-click to sell cards"
+        ]
+    
+    def _load_game_data(self) -> List[Player]:
+        """Load game data from file or create default"""
+        try:
+            if os.path.exists('data/mock_state.json'):
+                with open('data/mock_state.json', 'r') as f:
+                    data = json.load(f)
+                players_data = data.get("players", [])
+                return [Player(p) for p in players_data]
+        except:
+            pass
+        
+        # Create default player if no data exists
+        return [Player({
+            "player_id": "p1",
+            "hero": {"name": "Sylvanas", "health": 40},
+            "gold": 7,
+            "tavern_tier": 2,
+            "shop": [
+                {"name": "Buzzing Vermin", "attack": 2, "health": 3, "tier": 1, 
+                 "cost": 3, "keywords": ["Taunt", "Deathrattle"]},
+                {"name": "Forest Rover", "attack": 3, "health": 2, "tier": 1,
+                 "cost": 3, "keywords": ["Battlecry"]},
+                {"name": "Scarab", "attack": 2, "health": 2, "tier": 2,
+                 "cost": 3, "keywords": ["Choose One"]},
+                None,  # Empty slot
+                None   # Empty slot
+            ],
+            "hand": [
+                {"name": "Micro Machine", "attack": 1, "health": 2, "tier": 1,
+                 "cost": 3, "keywords": []}
+            ],
+            "board": [
+                {"name": "Defender", "attack": 2, "health": 4, "tier": 2,
+                 "keywords": ["Taunt"]},
+                None, None, None, None, None, None
+            ],
+            "flags": {"shop_frozen": False}
+        })]
+    
+    def _create_buttons(self) -> List[Button]:
+        """Create UI buttons"""
+        buttons = []
+        x_start = SCREEN_WIDTH - 150
+        y_start = 100
+        btn_width = 140
+        btn_height = 40
+        spacing = 50
+        
+        button_data = [
+            ("Refresh (1g)", "refresh"),
+            ("Freeze", "freeze"),
+            ("End Turn", "end_turn"),
+            ("Upgrade (5g)", "upgrade"),
+            ("Hero Power", "hero_power"),
+        ]
+        
+        for i, (text, action) in enumerate(button_data):
+            buttons.append(Button(
+                x_start, y_start + i * spacing,
+                btn_width, btn_height,
+                text, action
+            ))
+        
+        return buttons
+    
+    def _add_log(self, message: str, is_error: bool = False):
+        """Add message to log"""
+        color = "error" if is_error else "success"
+        self.log.append(message)
+        if len(self.log) > 8:  # Keep log manageable
+            self.log.pop(0)
+        print(f"[LOG] {message}")
+    
+    def handle_events(self):
+        """Handle all PyGame events"""
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_buttons = pygame.mouse.get_pressed()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            
+            elif event.type == pygame.KEYDOWN:
+                self._handle_keyboard(event)
+            
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # Left click
+                    self._handle_left_click(mouse_pos)
+                elif event.button == 3:  # Right click
+                    self._handle_right_click(mouse_pos)
+            
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1 and self.dragging_card:
+                    self._handle_card_drop(mouse_pos)
+        
+        # Update button states
+        for button in self.buttons:
+            button.check_hover(mouse_pos)
+            if button.is_hovered and mouse_buttons[0]:
+                self._handle_button_click(button.action)
+        
+        # Update dragging
+        if self.dragging_card:
+            self.dragging_card.update_drag(mouse_pos)
+    
+    def _handle_keyboard(self, event):
+        """Handle keyboard shortcuts"""
+        if event.key == pygame.K_ESCAPE:
+            self.running = False
+        elif event.key == pygame.K_r:
+            self._handle_refresh()
+        elif event.key == pygame.K_f:
+            self._handle_freeze()
+        elif event.key == pygame.K_SPACE:
+            self._handle_end_turn()
+    
+    def _handle_left_click(self, mouse_pos: Tuple[int, int]):
+        """Handle left mouse click for card dragging"""
+        # Check shop cards
+        for card in self.current_player.shop:
+            if card and card.contains_point(mouse_pos):
+                self.dragging_card = card
+                self.drag_source = "shop"
+                card.start_drag(mouse_pos)
+                return
+        
+        # Check hand cards
+        for card in self.current_player.hand:
+            if card and card.contains_point(mouse_pos):
+                self.dragging_card = card
+                self.drag_source = "hand"
+                card.start_drag(mouse_pos)
+                return
+        
+        # Check board cards
+        for card in self.current_player.board:
+            if card and card.contains_point(mouse_pos):
+                self.dragging_card = card
+                self.drag_source = "board"
+                card.start_drag(mouse_pos)
+                return
+    
+    def _handle_right_click(self, mouse_pos: Tuple[int, int]):
+        """Handle right click for quick sell"""
+        for i, card in enumerate(self.current_player.board):
+            if card and card.contains_point(mouse_pos):
+                self.current_player.gold += 1
+                self.current_player.board[i] = None
+                self._add_log(f"Sold {card.name} (+1 gold)")
+                return
+    
+    def _handle_card_drop(self, mouse_pos: Tuple[int, int]):
+        """Handle card drop after dragging"""
+        if not self.dragging_card:
+            return
+        
+        # Define board drop zone
+        board_rect = pygame.Rect(
+            self.current_player.board_pos[0] - 10,
+            self.current_player.board_pos[1] - 10,
+            BOARD_SLOTS * (CARD_WIDTH + 5) + 20,
+            CARD_HEIGHT + 20
+        )
+        
+        # Process based on drag source
+        if self.drag_source == "shop" and board_rect.collidepoint(mouse_pos):
+            self._buy_card()
+        elif self.drag_source == "hand" and board_rect.collidepoint(mouse_pos):
+            self._play_card()
+        elif self.drag_source == "board" and not board_rect.collidepoint(mouse_pos):
+            self._sell_card()
+        
+        # Clean up
+        if self.dragging_card:
+            self.dragging_card.stop_drag()
+            self.dragging_card = None
+            self.drag_source = ""
+    
+    def _buy_card(self):
+        """Buy card from shop"""
+        if self.current_player.gold < self.dragging_card.cost:
+            self._add_log("Not enough gold!", True)
+            return
+        
+        # Find and remove from shop
+        for i, card in enumerate(self.current_player.shop):
+            if card and card.instance_id == self.dragging_card.instance_id:
+                self.current_player.shop[i] = None
+                break
+        
+        # Add to hand
+        self.current_player.hand.append(self.dragging_card)
+        self.current_player.gold -= self.dragging_card.cost
+        self._add_log(f"Bought {self.dragging_card.name} (-{self.dragging_card.cost}g)")
+    
+    def _play_card(self):
+        """Play card from hand to board"""
+        # Find empty board slot
+        empty_slot = -1
+        for i in range(len(self.current_player.board)):
+            if self.current_player.board[i] is None:
+                empty_slot = i
+                break
+        
+        if empty_slot == -1 and len(self.current_player.board) < BOARD_SLOTS:
+            empty_slot = len(self.current_player.board)
+        
+        if empty_slot == -1:
+            self._add_log("Board is full!", True)
+            return
+        
+        # Remove from hand, add to board
+        self.current_player.hand = [c for c in self.current_player.hand 
+                                  if c.instance_id != self.dragging_card.instance_id]
+        
+        if empty_slot < len(self.current_player.board):
+            self.current_player.board[empty_slot] = self.dragging_card
+        else:
+            self.current_player.board.append(self.dragging_card)
+        
+        self._add_log(f"Played {self.dragging_card.name}")
+    
+    def _sell_card(self):
+        """Sell card from board"""
+        for i, card in enumerate(self.current_player.board):
+            if card and card.instance_id == self.dragging_card.instance_id:
+                self.current_player.board[i] = None
+                self.current_player.gold += 1
+                self._add_log(f"Sold {card.name} (+1 gold)")
+                return
+    
+    def _handle_button_click(self, action: str):
+        """Handle button clicks"""
+        if action == "refresh":
+            self._handle_refresh()
+        elif action == "freeze":
+            self._handle_freeze()
+        elif action == "end_turn":
+            self._handle_end_turn()
+        elif action == "upgrade":
+            self._handle_upgrade()
+        elif action == "hero_power":
+            self._handle_hero_power()
+    
+    def _handle_refresh(self):
+        """Refresh shop"""
+        if self.current_player.gold >= 1:
+            self.current_player.gold -= 1
+            # Simplified refresh - just mark shop as changed
+            self._add_log("Shop refreshed (-1 gold)")
+        else:
+            self._add_log("Not enough gold to refresh!", True)
+    
+    def _handle_freeze(self):
+        """Toggle shop freeze"""
+        self.current_player.shop_frozen = not self.current_player.shop_frozen
+        status = "frozen" if self.current_player.shop_frozen else "unfrozen"
+        self._add_log(f"Shop {status}")
+    
+    def _handle_end_turn(self):
+        """End current turn"""
+        self.timer.time_left = 0  # Force timer to end
+        self._add_log("Turn ended")
+    
+    def _handle_upgrade(self):
+        """Upgrade tavern tier"""
+        cost = 5  # Simplified cost
+        if self.current_player.gold >= cost:
+            self.current_player.gold -= cost
+            self.current_player.tavern_tier += 1
+            self._add_log(f"Tavern upgraded to tier {self.current_player.tavern_tier} (-{cost}g)")
+        else:
+            self._add_log("Not enough gold to upgrade!", True)
+    
+    def _handle_hero_power(self):
+        """Use hero power"""
+        if not self.current_player.hero_power_used:
+            self.current_player.hero_power_used = True
+            self._add_log(f"{self.current_player.hero_name} hero power used")
+        else:
+            self._add_log("Hero power already used this turn", True)
+    
+    def update(self, dt: float):
+        """Update game state"""
+        self.timer.update(dt)
+        
+        # Check if timer ended
+        if not self.timer.active and self.phase == "RECRUIT":
+            self.phase = "COMBAT"
+            self._add_log("Entering combat phase!")
+    
+    def draw(self):
+        """Draw everything to screen"""
+        # Clear screen
+        self.screen.fill(COLORS["bg"])
+        
+        # Draw title
+        title = FONT_TITLE.render("MAW BATTLEGROUNDS", True, COLORS["gold"])
+        self.screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, 10))
+        
+        # Draw player info
+        self._draw_player_info()
+        
+        # Draw game sections
+        self._draw_shop()
+        self._draw_hand()
+        self._draw_board()
+        
+        # Draw UI elements
+        self.timer.draw(self.screen)
+        for button in self.buttons:
+            button.draw(self.screen)
+        
+        # Draw log
+        self._draw_log()
+        
+        # Draw dragging card last (on top)
+        if self.dragging_card:
+            self.dragging_card.draw(self.screen, 
+                                   self.dragging_card.x, 
+                                   self.dragging_card.y,
+                                   show_cost=(self.drag_source == "shop"))
+        
+        # Draw phase indicator
+        phase_text = FONT_NORMAL.render(f"Phase: {self.phase}", True, COLORS["text"])
+        self.screen.blit(phase_text, (20, SCREEN_HEIGHT - 30))
+    
+    def _draw_player_info(self):
+        """Draw player information"""
+        if not self.current_player:
+            return
+        
+        # Hero name and health
+        hero_text = FONT_NORMAL.render(self.current_player.hero_name, True, (255, 255, 200))
+        self.screen.blit(hero_text, (20, 20))
+        
+        # Health and gold
+        stats = f"❤ {self.current_player.health}   💰 {self.current_player.gold}   🏰 T{self.current_player.tavern_tier}"
+        stats_text = FONT_NORMAL.render(stats, True, COLORS["text"])
+        self.screen.blit(stats_text, (20, 50))
+        
+        # Shop freeze indicator
+        if self.current_player.shop_frozen:
+            freeze_text = FONT_SMALL.render("❄ FROZEN", True, COLORS["shop"])
+            self.screen.blit(freeze_text, (200, 50))
+    
+    def _draw_shop(self):
+        """Draw shop section"""
+        title = FONT_NORMAL.render("SHOP", True, COLORS["shop"])
+        self.screen.blit(title, (self.current_player.shop_pos[0], 
+                                self.current_player.shop_pos[1] - 25))
+        
+        for i, card in enumerate(self.current_player.shop):
+            x = self.current_player.shop_pos[0] + i * (CARD_WIDTH + 10)
+            y = self.current_player.shop_pos[1]
+            
+            if card and card != self.dragging_card:
+                card.draw(self.screen, x, y, show_cost=True)
+            elif card is None:
+                # Draw empty slot
+                slot = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
+                pygame.draw.rect(self.screen, (30, 40, 60), slot, border_radius=6)
+                pygame.draw.rect(self.screen, (60, 80, 100), slot, 1, border_radius=6)
+    
+    def _draw_hand(self):
+        """Draw hand section"""
+        title = FONT_NORMAL.render("HAND", True, COLORS["hand"])
+        self.screen.blit(title, (self.current_player.hand_pos[0],
+                                self.current_player.hand_pos[1] - 25))
+        
+        for i, card in enumerate(self.current_player.hand):
+            if card and card != self.dragging_card:
+                x = self.current_player.hand_pos[0] + i * (CARD_WIDTH + 5)
+                y = self.current_player.hand_pos[1]
+                card.draw(self.screen, x, y)
+    
+    def _draw_board(self):
+        """Draw board section"""
+        title = FONT_NORMAL.render("BOARD", True, COLORS["board"])
+        self.screen.blit(title, (self.current_player.board_pos[0],
+                                self.current_player.board_pos[1] - 25))
+        
+        # Board background
+        board_bg = pygame.Rect(
+            self.current_player.board_pos[0] - 5,
+            self.current_player.board_pos[1] - 5,
+            BOARD_SLOTS * (CARD_WIDTH + 5) + 10,
+            CARD_HEIGHT + 10
+        )
+        pygame.draw.rect(self.screen, (35, 45, 65), board_bg, border_radius=8)
+        pygame.draw.rect(self.screen, (70, 100, 140), board_bg, 1, border_radius=8)
+        
+        # Draw board cards
+        for i in range(BOARD_SLOTS):
+            x = self.current_player.board_pos[0] + i * (CARD_WIDTH + 5)
+            y = self.current_player.board_pos[1]
+            
+            if i < len(self.current_player.board):
+                card = self.current_player.board[i]
+                if card and card != self.dragging_card:
+                    card.draw(self.screen, x, y)
+                elif card is None:
+                    # Empty slot indicator
+                    pygame.draw.rect(self.screen, (50, 60, 80), 
+                                    (x, y, CARD_WIDTH, CARD_HEIGHT), 1, border_radius=6)
+    
+    def _draw_log(self):
+        """Draw event log"""
+        log_bg = pygame.Rect(SCREEN_WIDTH - 300, SCREEN_HEIGHT - 180, 280, 160)
+        pygame.draw.rect(self.screen, (25, 35, 55), log_bg, border_radius=6)
+        pygame.draw.rect(self.screen, (60, 80, 110), log_bg, 1, border_radius=6)
+        
+        log_title = FONT_SMALL.render("EVENT LOG", True, COLORS["text"])
+        self.screen.blit(log_title, (SCREEN_WIDTH - 290, SCREEN_HEIGHT - 170))
+        
+        # Draw log messages
+        y_offset = SCREEN_HEIGHT - 145
+        for message in self.log[-6:]:  # Last 6 messages
+            text = FONT_SMALL.render(message, True, (200, 220, 255))
+            self.screen.blit(text, (SCREEN_WIDTH - 290, y_offset))
+            y_offset += 22
+    
+    def run(self):
+        """Main game loop"""
+        print("=" * 50)
+        print("MAW BATTLEGROUNDS - Lightweight Frontend")
+        print("=" * 50)
+        print("Controls:")
+        print("• Drag SHOP cards to BOARD to buy")
+        print("• Drag HAND cards to BOARD to play")
+        print("• Drag BOARD cards away to sell")
+        print("• Right-click BOARD cards to quick sell")
+        print("• R: Refresh shop | F: Freeze shop")
+        print("• SPACE: End turn | ESC: Exit")
+        print("=" * 50)
+        
+        while self.running:
+            # Limit FPS to 30 for better performance
+            dt = self.clock.tick(30) / 1000.0
+            
+            # Handle events
+            self.handle_events()
+            
+            # Update game state
+            self.update(dt)
+            
+            # Draw everything
+            self.draw()
+            
+            # Update display
+            pygame.display.flip()
+        
+        # Clean up
+        pygame.quit()
+        sys.exit()
+
+# ==================== MAIN EXECUTION ====================
+if __name__ == "__main__":
+    # Create data directory if needed
+    if not os.path.exists('data'):
+        os.makedirs('data')
+        print("Created 'data' directory")
+    
+    # Run the game
+    try:
+        game = GameClient()
+        game.run()
+    except pygame.error as e:
+        print(f"PyGame Error: {e}")
+        print("Your system may not support hardware acceleration.")
+        print("Try running with software rendering:")
+        print("  Set environment variable: SDL_VIDEODRIVER=windib")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to exit...")
