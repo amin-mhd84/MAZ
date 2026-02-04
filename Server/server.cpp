@@ -12,24 +12,26 @@
 #include <sstream>
 #include <iomanip>
 
-
-
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/websocket.hpp>
 #include <nlohmann/json.hpp>
 
+using json = nlohmann::json;
 
-#include "json.hpp"
+// ==================== Forward Declarations ====================
+class Player;
+class GameState;
 class Session;
 class GameServer;
+class Hero;
+class PlayerExtended;
 
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = boost::asio::ip::tcp;
-using json = nlohmann::json;
 using namespace std::chrono;
 
 // ==================== Constants & Enums ====================
@@ -61,13 +63,156 @@ std::string phaseToString(GamePhase phase) {
     }
 }
 
+// ==================== UUID Generator ====================
+class UUIDGenerator {
+public:
+    static std::string generate() {
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> dis(0, 15);
+        static std::uniform_int_distribution<> dis2(8, 11);
+        
+        std::stringstream ss;
+        ss << std::hex;
+        
+        for (int i = 0; i < 8; i++) ss << dis(gen);
+        ss << "-";
+        for (int i = 0; i < 4; i++) ss << dis(gen);
+        ss << "-4";
+        for (int i = 0; i < 3; i++) ss << dis(gen);
+        ss << "-";
+        ss << dis2(gen);
+        for (int i = 0; i < 3; i++) ss << dis(gen);
+        ss << "-";
+        for (int i = 0; i < 12; i++) ss << dis(gen);
+        
+        return ss.str();
+    }
+};
 
-#pragma once
-#include <string>
-#include <nlohmann/json.hpp>
+// ==================== Card Class ====================
+class Card {
+private:
+    std::string cardId;
+    std::string name;
+    int cost;
+    std::string instanceId;
+    
+public:
+    Card(const std::string& id, const std::string& n, int c)
+        : cardId(id), name(n), cost(c), instanceId(UUIDGenerator::generate()) {}
+    
+    std::string getCardId() const { return cardId; }
+    std::string getName() const { return name; }
+    int getCost() const { return cost; }
+    std::string getInstanceId() const { return instanceId; }
+    
+    json toJson() const {
+        return {
+            {"card_id", cardId},
+            {"name", name},
+            {"cost", cost},
+            {"instance_id", instanceId}
+        };
+    }
+};
 
-using json = nlohmann::json;
+// ==================== Player Class ====================
+class Player {
+private:
+    std::string token;
+    std::string name;
+    int gold;
+    int version;
+    bool isZombie;
 
+    std::vector<std::shared_ptr<Card>> hand;
+    std::vector<std::string> shop;
+
+public:
+    Player(const std::string& t)
+        : token(t), gold(START_GOLD), version(0), isZombie(false) {}
+
+    // --- getters ---
+    const std::string& getToken() const { return token; }
+    const std::string& getName() const { return name; }
+    int getGold() const { return gold; }
+    int getVersion() const { return version; }
+    bool zombie() const { return isZombie; }
+
+    // --- setters ---
+    void setName(const std::string& n) { name = n; }
+    void markZombie(bool z) { isZombie = z; }
+
+    // --- economy ---
+    bool spendGold(int amount) {
+        if (gold < amount) return false;
+        gold -= amount;
+        version++;
+        return true;
+    }
+
+    void gainGold(int amount) {
+        gold += amount;
+        version++;
+    }
+
+    void addToHand(std::shared_ptr<Card> card) {
+        hand.push_back(card);
+        version++;
+    }
+
+    bool removeFromHand(const std::string& instanceId, std::string& outCardId) {
+        for (auto it = hand.begin(); it != hand.end(); ++it) {
+            if ((*it)->getInstanceId() == instanceId) {
+                outCardId = (*it)->getCardId();
+                hand.erase(it);
+                version++;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void setShop(const std::vector<std::string>& cards) {
+        shop = cards;
+        version++;
+    }
+
+    std::string getShopCard(int index) const {
+        if (index < 0 || index >= (int)shop.size()) return "";
+        return shop[index];
+    }
+
+    void removeShopCard(int index) {
+        if (index < 0 || index >= (int)shop.size()) return;
+        shop[index] = "";
+        version++;
+    }
+
+    json toJson(bool full = false) const {
+        json j{
+            {"token", token},
+            {"name", name},
+            {"gold", gold},
+            {"version", version},
+            {"is_zombie", isZombie}
+        };
+
+        if (full) {
+            json handJson = json::array();
+            for (auto& c : hand)
+                handJson.push_back(c->toJson());
+
+            j["hand"] = handJson;
+            j["shop"] = shop;
+        }
+
+        return j;
+    }
+};
+
+// ==================== Hero Class ====================
 enum class HeroType {
     SYLVANAS,
     LICH_KING,
@@ -128,11 +273,7 @@ public:
     }
 };
 
-
-
-#pragma once
-#include <algorithm>
-
+// ==================== TavernEconomy ====================
 class TavernEconomy {
 private:
     int tavernLevel = 1;
@@ -166,16 +307,7 @@ public:
     }
 };
 
-
-
-#pragma once
-#include <vector>
-#include <string>
-#include <random>
-#include <nlohmann/json.hpp>
-
-using json = nlohmann::json;
-
+// ==================== ShopState ====================
 class ShopState {
 private:
     int tavernLevel = 1;
@@ -196,7 +328,6 @@ public:
     const std::vector<std::string>& getSlots() const {
         return slots;
     }
-
 
     void roll(const std::vector<std::string>& pool, std::mt19937& rng) {
         if (frozen) return;
@@ -232,10 +363,13 @@ public:
 
 #pragma once
 #include <memory>
+#include "Hero.hpp"
+#include "TavernEconomy.hpp"
+#include "ShopState.hpp"
 
 class PlayerExtended {
 public:
-    std::shared_ptr<Player> base;     
+    std::shared_ptr<Player> base;
     std::shared_ptr<Hero> hero;
     TavernEconomy economy;
     ShopState shop;
@@ -250,21 +384,139 @@ public:
     void onTurnStart() {
         int g = base->getGold();
         economy.onTurnStart(g);
-        base->gainGold(0);
+        base->gainGold(g - base->getGold());
     }
 };
 
+// ==================== Game State ====================
+class GameState {
+private:
+    GamePhase phase;
+    std::unordered_map<std::string, std::shared_ptr<Player>> players;
+    std::unordered_map<std::string, int> cardPool;
+    std::queue<json> actionQueue;
+    std::string gameId;
+    float turnTimer;
+    long long turnStartTime;
+    mutable std::mutex stateMutex;  // Make mutex mutable for const functions
+    
+    void initializeCardPool() {
+        cardPool = {
+            {"BG_001", 10},
+            {"BG_002", 10},
+            {"BG_003", 10},
+            {"BG_004", 10},
+            {"BG_005", 10},
+            {"BG_006", 10},
+            {"BG_007", 10},
+        };
+    }
+    
+public:
+    GameState() : phase(GamePhase::LOBBY), turnTimer(0), turnStartTime(0) {
+        gameId = UUIDGenerator::generate();
+        initializeCardPool();
+    }
+    
+    std::unique_lock<std::mutex> lock() {
+        return std::unique_lock<std::mutex>(stateMutex);
+    }
+    
+    std::unique_lock<std::mutex> lock() const {
+        return std::unique_lock<std::mutex>(stateMutex);
+    }
 
+    GamePhase getPhase() const { return phase; }
+    void setPhase(GamePhase p) { phase = p; }
+    
+    // Player management
+    bool addPlayer(const std::string& token, std::shared_ptr<Player> player) {
+        auto lock = this->lock();
+        if (players.size() >= MAX_PLAYERS) return false;
+        
+        players[token] = player;
+        return true;
+    }
+    
+    std::shared_ptr<Player> getPlayer(const std::string& token) {
+        auto lock = this->lock();
+        auto it = players.find(token);
+        return (it != players.end()) ? it->second : nullptr;
+    }
+    
+    std::vector<std::shared_ptr<Player>> getAllPlayers() const {
+        auto lock = this->lock();
+        std::vector<std::shared_ptr<Player>> result;
+        for (const auto& [_, player] : players) {
+            result.push_back(player);
+        }
+        return result;
+    }
+    
+    size_t getPlayerCount() const {
+        auto lock = this->lock();
+        return players.size();
+    }
+    
+    // Card pool management
+    bool takeCardFromPool(const std::string& cardId) {
+        auto lock = this->lock();
+        auto it = cardPool.find(cardId);
+        if (it != cardPool.end() && it->second > 0) {
+            it->second--;
+            return true;
+        }
+        return false;
+    }
+    
+    void returnCardToPool(const std::string& cardId) {
+        auto lock = this->lock();
+        cardPool[cardId]++;
+    }
+    
+    std::vector<std::string> getAvailableCards() const {
+        auto lock = this->lock();
+        std::vector<std::string> result;
+        for (const auto& [cardId, count] : cardPool) {
+            if (count > 0) result.push_back(cardId);
+        }
+        return result;
+    }
+    
+    // Action queue
+    void pushAction(const json& action) {
+        auto lock = this->lock();
+        actionQueue.push(action);
+    }
+    
+    bool popAction(json& action) {
+        auto lock = this->lock();
+        if (actionQueue.empty()) return false;
+        
+        action = actionQueue.front();
+        actionQueue.pop();
+        return true;
+    }
+    
+    bool hasActions() const {
+        auto lock = this->lock();
+        return !actionQueue.empty();
+    }
+    
+    // Timer management
+    void setTurnTimer(float timer) { turnTimer = timer; }
+    float getTurnTimer() const { return turnTimer; }
+    void updateTurnTimer(float delta) { turnTimer -= delta; }
+    
+    void setTurnStartTime(long long time) { turnStartTime = time; }
+    long long getTurnStartTime() const { return turnStartTime; }
+    
+    std::string getGameId() const { return gameId; }
+};
 
-
-
-#pragma once
-#include <nlohmann/json.hpp>
-using json = nlohmann::json;
-
+// ==================== GameProtocol ====================
 class GameProtocol {
 public:
-
     static json welcome(const std::string& token) {
         return {
             {"type","WELCOME"},
@@ -305,284 +557,7 @@ public:
     }
 };
 
-// ==================== UUID Generator ====================
-class UUIDGenerator {
-public:
-    static std::string generate() {
-        static std::random_device rd;
-        static std::mt19937 gen(rd());
-        static std::uniform_int_distribution<> dis(0, 15);
-        static std::uniform_int_distribution<> dis2(8, 11);
-        
-        std::stringstream ss;
-        ss << std::hex;
-        
-        for (int i = 0; i < 8; i++) ss << dis(gen);
-        ss << "-";
-        for (int i = 0; i < 4; i++) ss << dis(gen);
-        ss << "-4";
-        for (int i = 0; i < 3; i++) ss << dis(gen);
-        ss << "-";
-        ss << dis2(gen);
-        for (int i = 0; i < 3; i++) ss << dis(gen);
-        ss << "-";
-        for (int i = 0; i < 12; i++) ss << dis(gen);
-        
-        return ss.str();
-    }
-};
-
-// ==================== Card Class ====================
-class Card {
-private:
-    std::string cardId;
-    std::string name;
-    int cost;
-    std::string instanceId;
-    
-public:
-    Card(const std::string& id, const std::string& n, int c)
-        : cardId(id), name(n), cost(c), instanceId(UUIDGenerator::generate()) {}
-    
-    std::string getCardId() const { return cardId; }
-    std::string getName() const { return name; }
-    int getCost() const { return cost; }
-    std::string getInstanceId() const { return instanceId; }
-    
-    json toJson() const {
-        return {
-            {"card_id", cardId},
-            {"name", name},
-            {"cost", cost},
-            {"instance_id", instanceId}
-        };
-    }
-};
-
-// ==================== Player Class ====================
-
-class Player {
-private:
-    std::string token;
-    std::string name;
-    int gold;
-    int version;
-    bool isZombie;
-
-    std::vector<std::shared_ptr<Card>> hand;
-    std::vector<std::string> shop;
-
-public:
-    Player(const std::string& t)
-        : token(t), gold(START_GOLD), version(0), isZombie(false) {}
-
-    // --- getters ---
-    const std::string& getToken() const { return token; }
-    const std::string& getName() const { return name; }
-    int getGold() const { return gold; }
-    int getVersion() const { return version; }
-    bool zombie() const { return isZombie; }
-
-    // --- setters ---
-    void setName(const std::string& n) { name = n; }
-    void markZombie(bool z) { isZombie = z; }
-
-    // --- economy ---
-    bool spendGold(int amount) {
-        if (gold < amount) return false;
-        gold -= amount;
-        version++;
-        return true;
-    }
-
-    void gainGold(int amount) {
-        gold += amount;
-        version++;
-    }
-
-    void addToHand(std::shared_ptr<Card> card) {
-        hand.push_back(card);
-        version++;
-    }
-
-    bool removeFromHand(const std::string& instanceId, std::string& outCardId) {
-        for (auto it = hand.begin(); it != hand.end(); ++it) {
-            if ((*it)->getInstanceId() == instanceId) {
-                outCardId = (*it)->getCardId();
-                hand.erase(it);
-                version++;
-                return true;
-            }
-        }
-        return false;
-    }
-
-
-    void setShop(const std::vector<std::string>& cards) {
-        shop = cards;
-        version++;
-    }
-
-    std::string getShopCard(int index) const {
-        if (index < 0 || index >= (int)shop.size()) return "";
-        return shop[index];
-    }
-
-    void removeShopCard(int index) {
-        if (index < 0 || index >= (int)shop.size()) return;
-        shop[index] = "";
-        version++;
-    }
-
-
-    json toJson(bool full = false) const {
-        json j{
-            {"token", token},
-            {"name", name},
-            {"gold", gold},
-            {"version", version},
-            {"is_zombie", isZombie}
-        };
-
-        if (full) {
-            json handJson = json::array();
-            for (auto& c : hand)
-                handJson.push_back(c->toJson());
-
-            j["hand"] = handJson;
-            j["shop"] = shop;
-        }
-
-        return j;
-    }
-};
-
-
-
-// ==================== Game State ====================
-class GameState {
-private:
-    GamePhase phase;
-    std::unordered_map<std::string, std::shared_ptr<Player>> players;
-    std::unordered_map<std::string, int> cardPool;
-    std::queue<json> actionQueue;
-    std::string gameId;
-    float turnTimer;
-    long long turnStartTime;
-    std::mutex stateMutex;
-    
-    void initializeCardPool() {
-
-        cardPool = {
-            {"BG_001", 10},  
-            {"BG_002", 10},  
-            {"BG_003", 10},
-            {"BG_004", 10},
-            {"BG_005", 10},
-            {"BG_006", 10},
-            {"BG_007", 10},
-        };
-    }
-    
-public:
-    GameState() : phase(GamePhase::LOBBY), turnTimer(0), turnStartTime(0) {
-        gameId = UUIDGenerator::generate();
-        initializeCardPool();
-    }
-    
-    std::unique_lock<std::mutex> lock() {
-        return std::unique_lock<std::mutex>(stateMutex);
-    }
-    
-
-    GamePhase getPhase() const { return phase; }
-    void setPhase(GamePhase p) { phase = p; }
-    
-    // Player management
-    bool addPlayer(const std::string& token, std::shared_ptr<Player> player) {
-        auto lock = this->lock();
-        if (players.size() >= MAX_PLAYERS) return false;
-        
-        players[token] = player;
-        return true;
-    }
-    
-    std::shared_ptr<Player> getPlayer(const std::string& token) {
-        auto lock = this->lock();
-        auto it = players.find(token);
-        return (it != players.end()) ? it->second : nullptr;
-    }
-    
-    std::vector<std::shared_ptr<Player>> getAllPlayers() {
-        auto lock = this->lock();
-        std::vector<std::shared_ptr<Player>> result;
-        for (const auto& [_, player] : players) {
-            result.push_back(player);
-        }
-        return result;
-    }
-    
-    size_t getPlayerCount() const {
-        return players.size();
-    }
-    
-    // Card pool management
-    bool takeCardFromPool(const std::string& cardId) {
-        auto lock = this->lock();
-        auto it = cardPool.find(cardId);
-        if (it != cardPool.end() && it->second > 0) {
-            it->second--;
-            return true;
-        }
-        return false;
-    }
-    
-    void returnCardToPool(const std::string& cardId) {
-        auto lock = this->lock();
-        cardPool[cardId]++;
-    }
-    
-    std::vector<std::string> getAvailableCards() {
-        auto lock = this->lock();
-        std::vector<std::string> result;
-        for (const auto& [cardId, count] : cardPool) {
-            if (count > 0) result.push_back(cardId);
-        }
-        return result;
-    }
-    
-    // Action queue
-    void pushAction(const json& action) {
-        auto lock = this->lock();
-        actionQueue.push(action);
-    }
-    
-    bool popAction(json& action) {
-        auto lock = this->lock();
-        if (actionQueue.empty()) return false;
-        
-        action = actionQueue.front();
-        actionQueue.pop();
-        return true;
-    }
-    
-    bool hasActions() {
-        auto lock = this->lock();
-        return !actionQueue.empty();
-    }
-    
-    // Timer management
-    void setTurnTimer(float timer) { turnTimer = timer; }
-    float getTurnTimer() const { return turnTimer; }
-    void updateTurnTimer(float delta) { turnTimer -= delta; }
-    
-    void setTurnStartTime(long long time) { turnStartTime = time; }
-    long long getTurnStartTime() const { return turnStartTime; }
-    
-    std::string getGameId() const { return gameId; }
-};
-
-
+// ==================== Session Class (Full Definition) ====================
 class Session : public std::enable_shared_from_this<Session> {
 private:
     websocket::stream<tcp::socket> ws;
@@ -601,8 +576,6 @@ private:
     void doRead();
     void onRead(const std::string& msg);
 };
-
-
 
 // ==================== Game Server ====================
 class GameServer {
@@ -638,236 +611,28 @@ public:
         stop();
     }
 
-    void run(int port) {
-        running = true;
-        tcp::endpoint ep(tcp::v4(), port);
-        acceptor = std::make_unique<tcp::acceptor>(ioc, ep);
+    void run(int port);
+    void stop();
 
-        doAccept();
-        gameLoopThread = std::thread(&GameServer::gameLoop, this);
-        ioc.run();
-    }
-
-    void stop() {
-        running = false;
-        ioc.stop();
-        if (gameLoopThread.joinable())
-            gameLoopThread.join();
-    }
+    void enqueueAction(const json& action);
+    void addSession(const std::string& token, std::shared_ptr<Session> session);
+    void removeSession(const std::string& token);
 
 private:
-    void doAccept() {
-        acceptor->async_accept(
-            [this](boost::system::error_code ec, tcp::socket socket) {
-                if (!ec)
-                    std::make_shared<Session>(std::move(socket), this)->run();
-                doAccept();
-            }
-        );
-    }
-
-    void gameLoop() {
-        auto last = high_resolution_clock::now();
-
-        while (running) {
-            auto now = high_resolution_clock::now();
-            float delta =
-                duration_cast<milliseconds>(now - last).count() / 1000.f;
-            last = now;
-
-            // ❗ GAME OVER = stop advancing game state
-            if (gameState->getPhase() != GamePhase::GAME_OVER) {
-                updatePhase(delta);
-                processActions();
-            }
-
-            std::this_thread::sleep_for(milliseconds(50));
-        }
-    }
-
-    void processActions() {
-        json action;
-        while (true) {
-            {
-                std::lock_guard<std::mutex> lock(actionMutex);
-                if (actionQueue.empty())
-                    break;
-                action = actionQueue.front();
-                actionQueue.pop();
-            }
-            handleAction(action);
-        }
-    }
-
-public:
-    void enqueueAction(const json& action) {
-        std::lock_guard<std::mutex> lock(actionMutex);
-        actionQueue.push(action);
-    }
-
-    void addSession(const std::string& token, std::shared_ptr<Session> session) {
-        std::lock_guard<std::mutex> lock(sessionsMutex);
-        sessions.erase(token);
-        sessions[token] = session;
-    }
-
-    void removeSession(const std::string& token) {
-        {
-            std::lock_guard<std::mutex> lock(sessionsMutex);
-            sessions.erase(token);
-        }
-        if (auto p = gameState->getPlayer(token))
-            p->markZombie(true);
-    }
-
-private:
-    void updatePhase(float delta) {
-        switch (gameState->getPhase()) {
-
-        case GamePhase::LOBBY:
-            if (gameState->getPlayerCount() == MAX_PLAYERS)
-                enterHeroSelect();
-            break;
-
-        case GamePhase::HERO_SELECT:
-            phaseTimer -= delta;
-            if (phaseTimer <= 0)
-                enterRecruit();
-            break;
-
-        case GamePhase::RECRUIT:
-            phaseTimer -= delta;
-            if (phaseTimer <= 0 && !inGrace) {
-                inGrace = true;
-                graceTimer = GRACE_PERIOD;
-            }
-            if (inGrace) {
-                graceTimer -= delta;
-                if (graceTimer <= 0)
-                    enterCombat();
-            }
-            break;
-
-        case GamePhase::COMBAT_CALC:
-            break;
-
-        case GamePhase::LOG_REPLAY:
-            phaseTimer -= delta;
-            if (phaseTimer <= 0)
-                enterRecruit();
-            break;
-
-        case GamePhase::GAME_OVER:
-            // terminal state
-            break;
-        }
-    }
-
-    void enterHeroSelect() {
-        gameState->setPhase(GamePhase::HERO_SELECT);
-        phaseTimer = 10.f;
-        broadcast({{"type","phase_change"},{"phase","HERO_SELECT"}});
-    }
-
-    void enterRecruit() {
-        gameState->setPhase(GamePhase::RECRUIT);
-        phaseTimer = TURN_DURATION;
-        inGrace = false;
-        broadcast({{"type","phase_change"},{"phase","RECRUIT"}});
-    }
-
-    void enterCombat() {
-        gameState->setPhase(GamePhase::COMBAT_CALC);
-        runCombat();
-    }
-
-    void runCombat() {
-        std::vector<std::shared_ptr<Player>> alive;
-        for (auto& p : gameState->getAllPlayers())
-            if (!p->zombie())
-                alive.push_back(p);
-
-        if (alive.size() <= 1) {
-            gameState->setPhase(GamePhase::GAME_OVER);
-            broadcast({
-                {"type","game_over"},
-                {"winner", alive.empty() ? "none" : alive[0]->getName()}
-            });
-            return;
-        }
-
-        combatSeed =
-            std::hash<std::string>{}(gameState->getGameId()) ^
-            std::hash<int>{}(combatRound++);
-
-        combatRng.seed(combatSeed);
-
-        json log = json::array();
-        for (size_t i = 0; i + 1 < alive.size(); i += 2) {
-            int dmg = combatRng() % 10 + 1;
-            log.push_back({
-                {"p1", alive[i]->getName()},
-                {"p2", alive[i+1]->getName()},
-                {"damage", dmg}
-            });
-        }
-
-        broadcast({{"type","combat_log"},{"seed",combatSeed},{"log",log}});
-
-        gameState->setPhase(GamePhase::LOG_REPLAY);
-        phaseTimer = 5.f;
-    }
-
-    void handleAction(const json& action) {
-        const std::string type = action.value("action","");
-        const std::string token = action.value("token","");
-
-        auto player = gameState->getPlayer(token);
-        if (!player) return;
-
-        if (action.value("version",-1) != player->getVersion()) {
-            sendToPlayer(token,{
-                {"type","error"},
-                {"message","StateMismatch"}
-            });
-            return;
-        }
-
-        if (type == "END_TURN" &&
-            gameState->getPhase() == GamePhase::RECRUIT) {
-            phaseTimer = 0;
-        }
-    }
-
-    void broadcast(const json& msg) {
-        std::vector<std::shared_ptr<Session>> targets;
-        {
-            std::lock_guard<std::mutex> lock(sessionsMutex);
-            for (auto& [_, w] : sessions)
-                if (auto s = w.lock())
-                    targets.push_back(s);
-        }
-        for (auto& s : targets)
-            s->send(msg);
-    }
-
-    void sendToPlayer(const std::string& token, const json& msg) {
-        std::shared_ptr<Session> s;
-        {
-            std::lock_guard<std::mutex> lock(sessionsMutex);
-            auto it = sessions.find(token);
-            if (it == sessions.end()) return;
-            s = it->second.lock();
-        }
-        if (s) s->send(msg);
-    }
+    void doAccept();
+    void gameLoop();
+    void processActions();
+    void updatePhase(float delta);
+    void enterHeroSelect();
+    void enterRecruit();
+    void enterCombat();
+    void runCombat();
+    void handleAction(const json& action);
+    void broadcast(const json& msg);
+    void sendToPlayer(const std::string& token, const json& msg);
 };
 
-
-
-    // ==================== Session Class ====================
-
-
+// ==================== Session Implementation ====================
 Session::Session(tcp::socket socket, GameServer* srv)
     : ws(std::move(socket)), server(srv) {}
 
@@ -924,10 +689,7 @@ void Session::doRead() {
 void Session::onRead(const std::string& msg) {
     try {
         json data = json::parse(msg);
-
-
         data["token"] = token;
-
         server->enqueueAction(data);
     }
     catch (...) {
@@ -938,6 +700,226 @@ void Session::onRead(const std::string& msg) {
     }
 }
 
+// ==================== GameServer Implementation ====================
+void GameServer::run(int port) {
+    running = true;
+    tcp::endpoint ep(tcp::v4(), port);
+    acceptor = std::make_unique<tcp::acceptor>(ioc, ep);
+
+    doAccept();
+    gameLoopThread = std::thread(&GameServer::gameLoop, this);
+    ioc.run();
+}
+
+void GameServer::stop() {
+    running = false;
+    ioc.stop();
+    if (gameLoopThread.joinable())
+        gameLoopThread.join();
+}
+
+void GameServer::doAccept() {
+    acceptor->async_accept(
+        [this](boost::system::error_code ec, tcp::socket socket) {
+            if (!ec)
+                std::make_shared<Session>(std::move(socket), this)->run();
+            doAccept();
+        }
+    );
+}
+
+void GameServer::gameLoop() {
+    auto last = high_resolution_clock::now();
+
+    while (running) {
+        auto now = high_resolution_clock::now();
+        float delta =
+            duration_cast<milliseconds>(now - last).count() / 1000.f;
+        last = now;
+
+        // ❗ GAME OVER = stop advancing game state
+        if (gameState->getPhase() != GamePhase::GAME_OVER) {
+            updatePhase(delta);
+            processActions();
+        }
+
+        std::this_thread::sleep_for(milliseconds(50));
+    }
+}
+
+void GameServer::processActions() {
+    json action;
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(actionMutex);
+            if (actionQueue.empty())
+                break;
+            action = actionQueue.front();
+            actionQueue.pop();
+        }
+        handleAction(action);
+    }
+}
+
+void GameServer::enqueueAction(const json& action) {
+    std::lock_guard<std::mutex> lock(actionMutex);
+    actionQueue.push(action);
+}
+
+void GameServer::addSession(const std::string& token, std::shared_ptr<Session> session) {
+    std::lock_guard<std::mutex> lock(sessionsMutex);
+    sessions.erase(token);
+    sessions[token] = session;
+}
+
+void GameServer::removeSession(const std::string& token) {
+    {
+        std::lock_guard<std::mutex> lock(sessionsMutex);
+        sessions.erase(token);
+    }
+    if (auto p = gameState->getPlayer(token))
+        p->markZombie(true);
+}
+
+void GameServer::updatePhase(float delta) {
+    switch (gameState->getPhase()) {
+        case GamePhase::LOBBY:
+            if (gameState->getPlayerCount() == MAX_PLAYERS)
+                enterHeroSelect();
+            break;
+
+        case GamePhase::HERO_SELECT:
+            phaseTimer -= delta;
+            if (phaseTimer <= 0)
+                enterRecruit();
+            break;
+
+        case GamePhase::RECRUIT:
+            phaseTimer -= delta;
+            if (phaseTimer <= 0 && !inGrace) {
+                inGrace = true;
+                graceTimer = GRACE_PERIOD;
+            }
+            if (inGrace) {
+                graceTimer -= delta;
+                if (graceTimer <= 0)
+                    enterCombat();
+            }
+            break;
+
+        case GamePhase::COMBAT_CALC:
+            break;
+
+        case GamePhase::LOG_REPLAY:
+            phaseTimer -= delta;
+            if (phaseTimer <= 0)
+                enterRecruit();
+            break;
+
+        case GamePhase::GAME_OVER:
+            // terminal state
+            break;
+    }
+}
+
+void GameServer::enterHeroSelect() {
+    gameState->setPhase(GamePhase::HERO_SELECT);
+    phaseTimer = 10.f;
+    broadcast({{"type","phase_change"},{"phase","HERO_SELECT"}});
+}
+
+void GameServer::enterRecruit() {
+    gameState->setPhase(GamePhase::RECRUIT);
+    phaseTimer = TURN_DURATION;
+    inGrace = false;
+    broadcast({{"type","phase_change"},{"phase","RECRUIT"}});
+}
+
+void GameServer::enterCombat() {
+    gameState->setPhase(GamePhase::COMBAT_CALC);
+    runCombat();
+}
+
+void GameServer::runCombat() {
+    std::vector<std::shared_ptr<Player>> alive;
+    for (auto& p : gameState->getAllPlayers())
+        if (!p->zombie())
+            alive.push_back(p);
+
+    if (alive.size() <= 1) {
+        gameState->setPhase(GamePhase::GAME_OVER);
+        broadcast({
+            {"type","game_over"},
+            {"winner", alive.empty() ? "none" : alive[0]->getName()}
+        });
+        return;
+    }
+
+    combatSeed =
+        std::hash<std::string>{}(gameState->getGameId()) ^
+        std::hash<int>{}(combatRound++);
+
+    combatRng.seed(combatSeed);
+
+    json log = json::array();
+    for (size_t i = 0; i + 1 < alive.size(); i += 2) {
+        int dmg = combatRng() % 10 + 1;
+        log.push_back({
+            {"p1", alive[i]->getName()},
+            {"p2", alive[i+1]->getName()},
+            {"damage", dmg}
+        });
+    }
+
+    broadcast({{"type","combat_log"},{"seed",combatSeed},{"log",log}});
+
+    gameState->setPhase(GamePhase::LOG_REPLAY);
+    phaseTimer = 5.f;
+}
+
+void GameServer::handleAction(const json& action) {
+    const std::string type = action.value("action","");
+    const std::string token = action.value("token","");
+
+    auto player = gameState->getPlayer(token);
+    if (!player) return;
+
+    if (action.value("version",-1) != player->getVersion()) {
+        sendToPlayer(token,{
+            {"type","error"},
+            {"message","StateMismatch"}
+        });
+        return;
+    }
+
+    if (type == "END_TURN" &&
+        gameState->getPhase() == GamePhase::RECRUIT) {
+        phaseTimer = 0;
+    }
+}
+
+void GameServer::broadcast(const json& msg) {
+    std::vector<std::shared_ptr<Session>> targets;
+    {
+        std::lock_guard<std::mutex> lock(sessionsMutex);
+        for (auto& [_, w] : sessions)
+            if (auto s = w.lock())
+                targets.push_back(s);
+    }
+    for (auto& s : targets)
+        s->send(msg);
+}
+
+void GameServer::sendToPlayer(const std::string& token, const json& msg) {
+    std::shared_ptr<Session> s;
+    {
+        std::lock_guard<std::mutex> lock(sessionsMutex);
+        auto it = sessions.find(token);
+        if (it == sessions.end()) return;
+        s = it->second.lock();
+    }
+    if (s) s->send(msg);
+}
 
 // ==================== Main Function ====================
 int main() {
@@ -948,12 +930,11 @@ int main() {
     try {
         GameServer server;
         server.run(PORT);
-        
-
         return 0;
         
     } catch (const std::exception& e) {
         std::cerr << "💥 Fatal error: " << e.what() << std::endl;
         return 1;
+    
     }
 }
