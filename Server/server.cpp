@@ -232,9 +232,6 @@ public:
 
 #pragma once
 #include <memory>
-#include "Hero.hpp"
-#include "TavernEconomy.hpp"
-#include "ShopState.hpp"
 
 class PlayerExtended {
 public:
