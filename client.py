@@ -15,21 +15,20 @@ import threading
 # ==================== INITIALIZATION ====================
 pygame.init()
 
-# Optimized screen dimensions for better performance
-SCREEN_WIDTH = 1024  # Reduced from 1400
-SCREEN_HEIGHT = 768  # Reduced from 900
-CARD_WIDTH = 100     # Reduced from 120
-CARD_HEIGHT = 140    # Reduced from 160
+# Optimized screen dimensions
+SCREEN_WIDTH = 1024
+SCREEN_HEIGHT = 768
+CARD_WIDTH = 100
+CARD_HEIGHT = 140
 
 # Game constants
 SHOP_SLOTS = 5
-HAND_SLOTS = 10
 BOARD_SLOTS = 7
 START_GOLD = 3
 MAX_GOLD = 10
 TURN_DURATION = 30.0
 
-# Optimized color palette (fewer colors for performance)
+# Optimized color palette
 COLORS = {
     "bg": (15, 20, 35),
     "card_bg": (40, 50, 75),
@@ -38,7 +37,6 @@ COLORS = {
     "health": (255, 80, 80),
     "text": (230, 230, 230),
     "shop": (100, 180, 255),
-    "hand": (100, 220, 150),
     "board": (220, 160, 100),
     "button": (70, 130, 180),
     "button_hover": (90, 160, 220),
@@ -49,89 +47,78 @@ COLORS = {
     "success": (100, 220, 100),
 }
 
-# Simple font initialization - fewer font sizes
+# Simple font initialization
 pygame.font.init()
-FONT_TITLE = pygame.font.SysFont(None, 36)   # Reduced from 48
+FONT_TITLE = pygame.font.SysFont(None, 36)
 FONT_NORMAL = pygame.font.SysFont(None, 24)
 FONT_SMALL = pygame.font.SysFont(None, 18)
 
+# ==================== WEB SOCKET MANAGER ====================
 class WebSocketManager:
-    """مدیریت اتصال WebSocket به سرور"""
-    
     def __init__(self, game_client):
         self.game = game_client
         self.ws = None
         self.running = False
         self.connected = False
         self.token = None
-        self.reconnect_delay = 3  # ثانیه
-        self.uri = "ws://localhost:8888"  # آدرس سرور
+        self.reconnect_delay = 3
+        self.uri = "ws://localhost:8888"
         self.loop = None
         
     def start(self):
-        """شروع اتصال در thread جداگانه"""
         self.running = True
         thread = threading.Thread(target=self._run_async, daemon=True)
         thread.start()
         return thread
     
     def _run_async(self):
-        """اجرای async loop در thread جداگانه"""
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self._connect())
     
     async def _connect(self):
-        """اتصال به سرور"""
         while self.running:
             try:
-                print(f"📡 Connecting to {self.uri}...")
+                print(f"Connecting to {self.uri}...")
                 self.ws = await websockets.connect(self.uri, ping_interval=10)
                 self.connected = True
-                print("✅ Connected to server")
-                
-                # شروع دریافت پیام‌ها
+                print("Connected to server")
                 await self.receive_messages()
-                
             except Exception as e:
-                print(f"❌ Connection failed: {e}")
+                print(f"Connection failed: {e}")
                 self.connected = False
                 if self.running:
-                    print(f"🔄 Reconnecting in {self.reconnect_delay} seconds...")
+                    print(f"Reconnecting in {self.reconnect_delay} seconds...")
                     await asyncio.sleep(self.reconnect_delay)
     
     async def receive_messages(self):
-        """دریافت پیام‌ها از سرور"""
         try:
             async for message in self.ws:
                 await self.handle_message(message)
         except websockets.exceptions.ConnectionClosed:
-            print("🔌 Connection closed by server")
+            print("Connection closed by server")
             self.connected = False
         except Exception as e:
-            print(f"❌ Error receiving messages: {e}")
+            print(f"Error receiving messages: {e}")
             self.connected = False
     
     async def handle_message(self, message_str):
-        """پردازش پیام دریافتی از سرور"""
         try:
             message = json.loads(message_str)
             message_type = message.get("type", "")
             
-            print(f"📥 Received: {message_type}")
+            print(f"Received: {message_type}")
             
             if message_type == "WELCOME":
                 self.token = message.get("token")
-                print(f"🔑 Token received: {self.token}")
+                print(f"Token received: {self.token}")
                 self.game.offline_mode = False
                 self.game._add_log("Connected to server!")
                 
             elif message_type == "FULL_STATE":
-                # بروزرسانی کامل وضعیت بازی
                 await self.game._update_from_server(message)
                 
             elif message_type == "SHOP_UPDATE":
-                # بروزرسانی فروشگاه
                 await self.game._update_shop(message)
                 
             elif message_type == "phase_change":
@@ -147,13 +134,12 @@ class WebSocketManager:
                 
             elif message_type == "game_over":
                 winner = message.get("winner", "none")
-                self.game._add_log(f"🎮 Game Over! Winner: {winner}")
+                self.game._add_log(f"Game Over! Winner: {winner}")
                 
         except Exception as e:
-            print(f"❌ Error handling message: {e}")
+            print(f"Error handling message: {e}")
     
     async def send_action(self, action_type, payload=None):
-        """ارسال اکشن به سرور"""
         if not self.connected or not self.ws:
             self.game._add_log("Not connected to server!", True)
             return False
@@ -172,16 +158,15 @@ class WebSocketManager:
                 action["payload"] = payload
             
             await self.ws.send(json.dumps(action))
-            print(f"📤 Sent: {action_type}")
+            print(f"Sent: {action_type}")
             return True
             
         except Exception as e:
-            print(f"❌ Error sending action: {e}")
+            print(f"Error sending action: {e}")
             self.connected = False
             return False
     
     def disconnect(self):
-        """قطع اتصال"""
         self.running = False
         self.connected = False
         if self.ws:
@@ -189,8 +174,6 @@ class WebSocketManager:
 
 # ==================== CARD CLASS ====================
 class Card:
-    """Represents a game card with optimized rendering"""
-    
     def __init__(self, data: Dict):
         self.card_id = data.get("card_id", "UNKNOWN")
         self.name = data.get("name", "Unknown")
@@ -203,7 +186,6 @@ class Card:
         self.keywords = data.get("keywords", [])
         self.has_divine_shield = data.get("has_divine_shield", False)
         
-        # Display properties
         self.x = 0
         self.y = 0
         self.width = CARD_WIDTH
@@ -211,69 +193,57 @@ class Card:
         self.is_dragging = False
         self.drag_offset = (0, 0)
         
-        # Pre-calculate color for performance
         self.color = self._calculate_color()
     
     def _calculate_color(self):
-        """Calculate card color based on tier (optimized)"""
         tier_colors = [
-            (100, 100, 100),  # Tier 0
-            (80, 150, 80),    # Tier 1
-            (80, 150, 200),   # Tier 2
-            (180, 120, 220),  # Tier 3
-            (220, 160, 60),   # Tier 4
-            (220, 80, 80),    # Tier 5
+            (100, 100, 100),
+            (80, 150, 80),
+            (80, 150, 200),
+            (180, 120, 220),
+            (220, 160, 60),
+            (220, 80, 80),
         ]
         tier_idx = min(self.tier, len(tier_colors) - 1)
         return (255, 215, 0) if self.is_golden else tier_colors[tier_idx]
     
     def contains_point(self, point: Tuple[int, int]) -> bool:
-        """Check if point is inside card (optimized)"""
         return (self.x <= point[0] <= self.x + self.width and 
                 self.y <= point[1] <= self.y + self.height)
     
     def start_drag(self, mouse_pos: Tuple[int, int]):
-        """Start dragging the card"""
         self.is_dragging = True
         self.drag_offset = (mouse_pos[0] - self.x, mouse_pos[1] - self.y)
     
     def update_drag(self, mouse_pos: Tuple[int, int]):
-        """Update card position during drag"""
         if self.is_dragging:
             self.x = mouse_pos[0] - self.drag_offset[0]
             self.y = mouse_pos[1] - self.drag_offset[1]
     
     def stop_drag(self):
-        """Stop dragging the card"""
         self.is_dragging = False
     
     def draw(self, surface: pygame.Surface, x: int, y: int, show_cost: bool = False):
-        """Draw the card with optimized rendering"""
         self.x, self.y = x, y
         
-        # Draw card background (simplified)
         card_rect = pygame.Rect(x, y, self.width, self.height)
         pygame.draw.rect(surface, self.color, card_rect, border_radius=8)
         pygame.draw.rect(surface, COLORS["card_border"], card_rect, 2, border_radius=8)
         
-        # Card name (truncated)
         name = self.name[:12] + "..." if len(self.name) > 12 else self.name
         name_text = FONT_SMALL.render(name, True, COLORS["text"])
         surface.blit(name_text, (x + 5, y + 5))
         
-        # Attack value (simplified)
         attack_text = FONT_NORMAL.render(str(self.attack), True, (255, 255, 255))
         attack_bg = pygame.Rect(x + 5, y + self.height - 30, 25, 25)
         pygame.draw.rect(surface, COLORS["health"], attack_bg, border_radius=12)
         surface.blit(attack_text, (x + 10, y + self.height - 27))
         
-        # Health value (simplified)
         health_text = FONT_NORMAL.render(str(self.health), True, (255, 255, 255))
         health_bg = pygame.Rect(x + self.width - 30, y + self.height - 30, 25, 25)
         pygame.draw.rect(surface, (80, 200, 80), health_bg, border_radius=12)
         surface.blit(health_text, (x + self.width - 25, y + self.height - 27))
         
-        # Keywords (limited to 2 for performance)
         y_offset = y + 35
         for keyword in self.keywords[:2]:
             if keyword == "Taunt":
@@ -285,29 +255,23 @@ class Card:
             else:
                 color = (180, 180, 180)
             
-            # Simplified keyword display
             kw_text = FONT_SMALL.render(keyword[:8], True, color)
             surface.blit(kw_text, (x + 5, y_offset))
             y_offset += 18
         
-        # Divine Shield indicator
         if self.has_divine_shield:
             shield_text = FONT_SMALL.render("S", True, COLORS["divine_shield"])
             surface.blit(shield_text, (x + self.width - 15, y + 5))
         
-        # Cost (only for shop cards)
         if show_cost:
             cost_text = FONT_NORMAL.render(str(self.cost), True, COLORS["gold"])
             surface.blit(cost_text, (x + self.width - 25, y + 5))
 
 # ==================== PLAYER CLASS ====================
 class Player:
-    """Represents a player with game state"""
-    
     def __init__(self, data: Dict):
         self.player_id = data.get("player_id", "p1")
         
-        # Handle hero data (could be string or dict)
         hero_data = data.get("hero", {})
         if isinstance(hero_data, dict):
             self.hero_name = hero_data.get("name", "Sylvanas")
@@ -323,33 +287,33 @@ class Player:
         self.gold = data.get("gold", START_GOLD)
         self.tavern_tier = data.get("tavern_tier", 1)
         
-        # Parse cards
         self.shop = self._parse_cards(data.get("shop", []), is_shop=True)
-        self.hand = self._parse_cards(data.get("hand", []))
         self.board = self._parse_cards(data.get("board", []))
         
-        # Flags
         self.shop_frozen = data.get("flags", {}).get("shop_frozen", False)
         
-        # Display positions (optimized layout)
         self.shop_pos = (30, 120)
-        self.hand_pos = (30, 500)
-        self.board_pos = (400, 300)
+        self.board_pos = (30, 400)
     
     def _parse_cards(self, card_list: List, is_shop: bool = False) -> List:
-        """Parse card data into Card objects"""
         cards = []
         for item in card_list:
-            if item:  # Not empty/None
+            if item:
                 cards.append(Card(item))
             elif is_shop:
-                cards.append(None)  # Empty shop slot
+                cards.append(None)
         return cards
+
+    def _find_empty_board_slot(self):
+        for i, card in enumerate(self.board):
+            if card is None:
+                return i
+        if len(self.board) < BOARD_SLOTS:
+            return len(self.board)
+        return -1
 
 # ==================== BUTTON CLASS ====================
 class Button:
-    """Simple UI button with hover effect"""
-    
     def __init__(self, x: int, y: int, width: int, height: int, 
                  text: str, action: str = ""):
         self.rect = pygame.Rect(x, y, width, height)
@@ -359,29 +323,24 @@ class Button:
         self.enabled = True
     
     def draw(self, surface: pygame.Surface):
-        """Draw the button"""
         color = COLORS["button_hover"] if self.is_hovered else COLORS["button"]
         if not self.enabled:
-            color = (100, 100, 120)  # Disabled color
+            color = (100, 100, 120)
         
         pygame.draw.rect(surface, color, self.rect, border_radius=6)
         pygame.draw.rect(surface, (255, 255, 255), self.rect, 1, border_radius=6)
         
-        # Button text
         text_color = (255, 255, 255) if self.enabled else (150, 150, 150)
         text_surf = FONT_NORMAL.render(self.text, True, text_color)
         text_rect = text_surf.get_rect(center=self.rect.center)
         surface.blit(text_surf, text_rect)
     
     def check_hover(self, mouse_pos: Tuple[int, int]) -> bool:
-        """Check if mouse is hovering over button"""
         self.is_hovered = self.rect.collidepoint(mouse_pos) and self.enabled
         return self.is_hovered
 
 # ==================== TIMER CLASS ====================
 class Timer:
-    """Game phase timer with grace period"""
-    
     def __init__(self, x: int, y: int):
         self.x = x
         self.y = y
@@ -391,7 +350,6 @@ class Timer:
         self.active = True
     
     def update(self, dt: float):
-        """Update timer with delta time"""
         if not self.active:
             return
             
@@ -406,34 +364,30 @@ class Timer:
                 self.active = False
     
     def draw(self, surface: pygame.Surface):
-        """Draw timer visualization"""
         bar_width = 250
         bar_height = 20
         
-        # Background
         bg_rect = pygame.Rect(self.x, self.y, bar_width, bar_height)
         pygame.draw.rect(surface, (40, 50, 70), bg_rect, border_radius=3)
         
-        # Progress
         if self.in_grace:
             progress = self.grace_time / 2.0
-            color = (255, 200, 50)  # Yellow for grace
+            color = (255, 200, 50)
             label = "GRACE"
         else:
             progress = self.time_left / TURN_DURATION
             if progress > 0.5:
-                color = (80, 200, 100)  # Green
+                color = (80, 200, 100)
             elif progress > 0.2:
-                color = (255, 200, 50)  # Yellow
+                color = (255, 200, 50)
             else:
-                color = (255, 80, 80)   # Red
+                color = (255, 80, 80)
             label = "RECRUIT"
         
         fill_width = int(bar_width * progress)
         fill_rect = pygame.Rect(self.x, self.y, fill_width, bar_height)
         pygame.draw.rect(surface, color, fill_rect, border_radius=3)
         
-        # Border and text
         pygame.draw.rect(surface, (180, 180, 200), bg_rect, 1, border_radius=3)
         
         time_text = f"{label}: {self.grace_time:.1f}s" if self.in_grace else f"{label}: {self.time_left:.1f}s"
@@ -443,10 +397,7 @@ class Timer:
 
 # ==================== GAME CLIENT CLASS ====================
 class GameClient:
-    """Main game client with optimized rendering"""
-    
     def __init__(self):
-        # Initialize PyGame with safe settings
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("MAW Battlegrounds - Lightweight")
         
@@ -454,40 +405,32 @@ class GameClient:
         self.running = True
         self.offline_mode = True
         
-        # WebSocket connection
         self.ws_manager = WebSocketManager(self)
         self.ws_thread = None
         
-        # Game state
         self.phase = "RECRUIT"
         self.players = self._load_game_data()
         self.current_player = self.players[0] if self.players else None
         
-        # UI elements
         self.timer = Timer(SCREEN_WIDTH - 280, 20)
         self.buttons = self._create_buttons()
         
-        # Drag and drop
         self.dragging_card = None
-        self.drag_source = ""  # "shop", "hand", "board"
+        self.drag_source = ""
         
-        # Event log (simplified)
         self.log = [
             "Game started in lightweight mode",
-            "Drag cards to interact",
-            "Right-click to sell cards"
+            "Drag shop cards to board to buy",
+            "Right-click board cards to sell"
         ]
         
-        # شروع اتصال WebSocket
         self.start_websocket()
     
     def start_websocket(self):
-        """شروع اتصال WebSocket"""
-        print("🌐 Starting WebSocket connection...")
+        print("Starting WebSocket connection...")
         self.ws_thread = self.ws_manager.start()
     
     def _load_game_data(self) -> List[Player]:
-        """Load game data from file or create default"""
         try:
             if os.path.exists('data/mock_state.json'):
                 with open('data/mock_state.json', 'r') as f:
@@ -497,7 +440,6 @@ class GameClient:
         except:
             pass
         
-        # Create default player if no data exists
         return [Player({
             "player_id": "p1",
             "hero": {"name": "Sylvanas", "health": 40},
@@ -510,12 +452,8 @@ class GameClient:
                  "cost": 3, "keywords": ["Battlecry"]},
                 {"name": "Scarab", "attack": 2, "health": 2, "tier": 2,
                  "cost": 3, "keywords": ["Choose One"]},
-                None,  # Empty slot
-                None   # Empty slot
-            ],
-            "hand": [
-                {"name": "Micro Machine", "attack": 1, "health": 2, "tier": 1,
-                 "cost": 3, "keywords": []}
+                None,
+                None
             ],
             "board": [
                 {"name": "Defender", "attack": 2, "health": 4, "tier": 2,
@@ -526,7 +464,6 @@ class GameClient:
         })]
     
     def _create_buttons(self) -> List[Button]:
-        """Create UI buttons"""
         buttons = []
         x_start = SCREEN_WIDTH - 150
         y_start = 100
@@ -552,54 +489,82 @@ class GameClient:
         return buttons
     
     def _add_log(self, message: str, is_error: bool = False):
-        """Add message to log"""
         color = "error" if is_error else "success"
         self.log.append(message)
-        if len(self.log) > 8:  # Keep log manageable
+        if len(self.log) > 8:
             self.log.pop(0)
         print(f"[LOG] {message}")
     
     async def _send_to_server(self, action_type, payload=None):
-        """ارسال غیرهمزمان به سرور"""
         if self.ws_manager.connected:
             await self.ws_manager.send_action(action_type, payload)
         else:
             self._add_log("Not connected to server", True)
     
+    def _run_async_in_thread(self, coro):
+        if hasattr(self.ws_manager, 'loop') and self.ws_manager.loop:
+            asyncio.run_coroutine_threadsafe(coro, self.ws_manager.loop)
+        else:
+            print("Warning: No event loop available")
+    
     def handle_events(self):
-        """Handle all PyGame events"""
         mouse_pos = pygame.mouse.get_pos()
-        mouse_buttons = pygame.mouse.get_pressed()
-        
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
             
             elif event.type == pygame.KEYDOWN:
+                # فقط در لحظه فشرده شدن کلید
                 self._handle_keyboard(event)
             
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left click
-                    self._handle_left_click(mouse_pos)
+                    mouse_handled = False
+                    
+                    # ابتدا کارت‌های shop را بررسی کن
+                    if self.current_player:
+                        for card in self.current_player.shop:
+                            if card and card.contains_point(mouse_pos):
+                                self.dragging_card = card
+                                self.drag_source = "shop"
+                                card.start_drag(mouse_pos)
+                                mouse_handled = True
+                                break
+                        
+                        # اگر روی shop نبود، board را بررسی کن
+                        if not mouse_handled:
+                            for card in self.current_player.board:
+                                if card and card.contains_point(mouse_pos):
+                                    self.dragging_card = card
+                                    self.drag_source = "board"
+                                    card.start_drag(mouse_pos)
+                                    mouse_handled = True
+                                    break
+                    
+                    # اگر روی کارتی نبود، دکمه‌ها را بررسی کن
+                    if not mouse_handled:
+                        for button in self.buttons:
+                            if button.rect.collidepoint(mouse_pos) and button.enabled:
+                                print(f"Button clicked: {button.action}")  # برای دیباگ
+                                self._handle_button_click(button.action)
+                                break
+                
                 elif event.button == 3:  # Right click
                     self._handle_right_click(mouse_pos)
             
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1 and self.dragging_card:
                     self._handle_card_drop(mouse_pos)
-        
-        # Update button states
+
+        # فقط برای hover کردن دکمه‌ها (نه برای کلیک)
         for button in self.buttons:
             button.check_hover(mouse_pos)
-            if button.is_hovered and mouse_buttons[0]:
-                self._handle_button_click(button.action)
-        
+
         # Update dragging
         if self.dragging_card:
-            self.dragging_card.update_drag(mouse_pos)
-    
+            self.dragging_card.update_drag(mouse_pos)    
     def _handle_keyboard(self, event):
-        """Handle keyboard shortcuts"""
         if event.key == pygame.K_ESCAPE:
             self.running = False
         elif event.key == pygame.K_r:
@@ -610,11 +575,9 @@ class GameClient:
             self._handle_end_turn()
     
     def _handle_left_click(self, mouse_pos: Tuple[int, int]):
-        """Handle left mouse click for card dragging"""
         if not self.current_player:
             return
             
-        # Check shop cards
         for card in self.current_player.shop:
             if card and card.contains_point(mouse_pos):
                 self.dragging_card = card
@@ -622,15 +585,6 @@ class GameClient:
                 card.start_drag(mouse_pos)
                 return
         
-        # Check hand cards
-        for card in self.current_player.hand:
-            if card and card.contains_point(mouse_pos):
-                self.dragging_card = card
-                self.drag_source = "hand"
-                card.start_drag(mouse_pos)
-                return
-        
-        # Check board cards
         for card in self.current_player.board:
             if card and card.contains_point(mouse_pos):
                 self.dragging_card = card
@@ -639,35 +593,27 @@ class GameClient:
                 return
     
     def _handle_right_click(self, mouse_pos: Tuple[int, int]):
-        """Handle right click for quick sell"""
         if not self.current_player:
             return
             
         for i, card in enumerate(self.current_player.board):
             if card and card.contains_point(mouse_pos):
                 if self.offline_mode:
-                    # منطق آفلاین
                     self.current_player.gold += 1
                     self.current_player.board[i] = None
                     self._add_log(f"Sold {card.name} (+1 gold)")
                 else:
-                    # ارسال به سرور
                     payload = {
                         "instance_id": card.instance_id,
                         "slot": i
                     }
-                    asyncio.run_coroutine_threadsafe(
-                        self._send_to_server("SELL_MINION", payload),
-                        self.ws_manager.loop
-                    )
+                    self._run_async_in_thread(self._send_to_server("SELL_MINION", payload))
                 return
     
     def _handle_card_drop(self, mouse_pos: Tuple[int, int]):
-        """Handle card drop after dragging"""
         if not self.dragging_card or not self.current_player:
             return
         
-        # Define board drop zone
         board_rect = pygame.Rect(
             self.current_player.board_pos[0] - 10,
             self.current_player.board_pos[1] - 10,
@@ -675,43 +621,43 @@ class GameClient:
             CARD_HEIGHT + 20
         )
         
-        # Process based on drag source
         if self.drag_source == "shop" and board_rect.collidepoint(mouse_pos):
             self._buy_card()
-        elif self.drag_source == "hand" and board_rect.collidepoint(mouse_pos):
-            self._play_card()
         elif self.drag_source == "board" and not board_rect.collidepoint(mouse_pos):
             self._sell_card()
         
-        # Clean up
         if self.dragging_card:
             self.dragging_card.stop_drag()
             self.dragging_card = None
             self.drag_source = ""
     
     def _buy_card(self):
-        """Buy card from shop"""
         if not self.dragging_card or not self.current_player:
             return
             
         if self.offline_mode:
-            # منطق آفلاین
             if self.current_player.gold < self.dragging_card.cost:
                 self._add_log("Not enough gold!", True)
                 return
             
-            # Find and remove from shop
+            empty_slot = self.current_player._find_empty_board_slot()
+            if empty_slot == -1:
+                self._add_log("Board is full!", True)
+                return
+            
             for i, card in enumerate(self.current_player.shop):
                 if card and card.instance_id == self.dragging_card.instance_id:
                     self.current_player.shop[i] = None
                     break
             
-            # Add to hand
-            self.current_player.hand.append(self.dragging_card)
+            if empty_slot < len(self.current_player.board):
+                self.current_player.board[empty_slot] = self.dragging_card
+            else:
+                self.current_player.board.append(self.dragging_card)
+            
             self.current_player.gold -= self.dragging_card.cost
             self._add_log(f"Bought {self.dragging_card.name} (-{self.dragging_card.cost}g)")
         else:
-            # ارسال به سرور
             shop_slot = self._find_card_slot(self.dragging_card, "shop")
             if shop_slot >= 0:
                 payload = {
@@ -719,62 +665,13 @@ class GameClient:
                     "card_id": self.dragging_card.card_id,
                     "expected_cost": self.dragging_card.cost
                 }
-                asyncio.run_coroutine_threadsafe(
-                    self._send_to_server("BUY_MINION", payload),
-                    self.ws_manager.loop
-                )
-    
-    def _play_card(self):
-        """Play card from hand to board"""
-        if not self.dragging_card or not self.current_player:
-            return
-            
-        if self.offline_mode:
-            # منطق آفلاین
-            # Find empty board slot
-            empty_slot = -1
-            for i in range(len(self.current_player.board)):
-                if self.current_player.board[i] is None:
-                    empty_slot = i
-                    break
-            
-            if empty_slot == -1 and len(self.current_player.board) < BOARD_SLOTS:
-                empty_slot = len(self.current_player.board)
-            
-            if empty_slot == -1:
-                self._add_log("Board is full!", True)
-                return
-            
-            # Remove from hand, add to board
-            self.current_player.hand = [c for c in self.current_player.hand 
-                                      if c.instance_id != self.dragging_card.instance_id]
-            
-            if empty_slot < len(self.current_player.board):
-                self.current_player.board[empty_slot] = self.dragging_card
-            else:
-                self.current_player.board.append(self.dragging_card)
-            
-            self._add_log(f"Played {self.dragging_card.name}")
-        else:
-            # ارسال به سرور
-            hand_slot = self._find_card_slot(self.dragging_card, "hand")
-            if hand_slot >= 0:
-                payload = {
-                    "hand_slot": hand_slot,
-                    "instance_id": self.dragging_card.instance_id
-                }
-                asyncio.run_coroutine_threadsafe(
-                    self._send_to_server("PLAY_MINION", payload),
-                    self.ws_manager.loop
-                )
+                self._run_async_in_thread(self._send_to_server("BUY_MINION", payload))
     
     def _sell_card(self):
-        """Sell card from board"""
         if not self.dragging_card or not self.current_player:
             return
             
         if self.offline_mode:
-            # منطق آفلاین
             for i, card in enumerate(self.current_player.board):
                 if card and card.instance_id == self.dragging_card.instance_id:
                     self.current_player.board[i] = None
@@ -782,20 +679,18 @@ class GameClient:
                     self._add_log(f"Sold {card.name} (+1 gold)")
                     return
         else:
-            # ارسال به سرور
             board_slot = self._find_card_slot(self.dragging_card, "board")
             if board_slot >= 0:
                 payload = {
                     "instance_id": self.dragging_card.instance_id,
                     "slot": board_slot
                 }
-                asyncio.run_coroutine_threadsafe(
-                    self._send_to_server("SELL_MINION", payload),
-                    self.ws_manager.loop
-                )
+                self._run_async_in_thread(self._send_to_server("SELL_MINION", payload))
     
     def _handle_button_click(self, action: str):
-        """Handle button clicks"""
+        """Handle button clicks - فقط یک بار اجرا می‌شود"""
+        print(f"Processing button action: {action}")
+        
         if action == "refresh":
             self._handle_refresh()
         elif action == "freeze":
@@ -805,54 +700,35 @@ class GameClient:
         elif action == "upgrade":
             self._handle_upgrade()
         elif action == "hero_power":
-            self._handle_hero_power()
-    
+            self._handle_hero_power()    
     def _handle_refresh(self):
-        """Refresh shop"""
         if self.offline_mode:
-            # منطق آفلاین
             if self.current_player.gold >= 1:
                 self.current_player.gold -= 1
                 self._add_log("Shop refreshed (-1 gold)")
             else:
                 self._add_log("Not enough gold to refresh!", True)
         else:
-            # ارسال به سرور
-            asyncio.run_coroutine_threadsafe(
-                self._send_to_server("REFRESH_SHOP"),
-                self.ws_manager.loop
-            )
+            self._run_async_in_thread(self._send_to_server("REFRESH_SHOP"))
     
     def _handle_freeze(self):
-        """Toggle shop freeze"""
         if self.offline_mode:
-            # منطق آفلاین
             self.current_player.shop_frozen = not self.current_player.shop_frozen
             status = "frozen" if self.current_player.shop_frozen else "unfrozen"
             self._add_log(f"Shop {status}")
         else:
-            # ارسال به سرور
-            asyncio.run_coroutine_threadsafe(
-                self._send_to_server("TOGGLE_FREEZE"),
-                self.ws_manager.loop
-            )
+            self._run_async_in_thread(self._send_to_server("TOGGLE_FREEZE"))
     
     def _handle_end_turn(self):
-        """End current turn"""
         if self.offline_mode:
             self.timer.time_left = 0
             self._add_log("Turn ended")
         else:
-            asyncio.run_coroutine_threadsafe(
-                self._send_to_server("END_TURN"),
-                self.ws_manager.loop
-            )
+            self._run_async_in_thread(self._send_to_server("END_TURN"))
     
     def _handle_upgrade(self):
-        """Upgrade tavern tier"""
-        cost = 5  # Simplified cost
+        cost = 5
         if self.offline_mode:
-            # منطق آفلاین
             if self.current_player.gold >= cost:
                 self.current_player.gold -= cost
                 self.current_player.tavern_tier += 1
@@ -860,104 +736,76 @@ class GameClient:
             else:
                 self._add_log("Not enough gold to upgrade!", True)
         else:
-            # ارسال به سرور
             payload = {
                 "current_tier": self.current_player.tavern_tier,
                 "expected_cost": cost
             }
-            asyncio.run_coroutine_threadsafe(
-                self._send_to_server("UPGRADE_TAVERN", payload),
-                self.ws_manager.loop
-            )
+            self._run_async_in_thread(self._send_to_server("UPGRADE_TAVERN", payload))
     
     def _handle_hero_power(self):
-        """Use hero power"""
         if self.offline_mode:
-            # منطق آفلاین
             if not self.current_player.hero_power_used:
                 self.current_player.hero_power_used = True
                 self._add_log(f"{self.current_player.hero_name} hero power used")
             else:
                 self._add_log("Hero power already used this turn", True)
         else:
-            # ارسال به سرور
-            asyncio.run_coroutine_threadsafe(
-                self._send_to_server("USE_HERO_POWER"),
-                self.ws_manager.loop
-            )
+            self._run_async_in_thread(self._send_to_server("USE_HERO_POWER"))
     
     def update(self, dt: float):
-        """Update game state"""
         self.timer.update(dt)
         
-        # Check if timer ended
         if not self.timer.active and self.phase == "RECRUIT":
             self.phase = "COMBAT"
             self._add_log("Entering combat phase!")
     
     def draw(self):
-        """Draw everything to screen"""
-        # Clear screen
         self.screen.fill(COLORS["bg"])
         
-        # Draw title
         title = FONT_TITLE.render("MAW BATTLEGROUNDS", True, COLORS["gold"])
         self.screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, 10))
         
-        # Draw connection status
-        status = "🌐 Connected" if self.ws_manager.connected else "🔴 Offline"
+        status = "Connected" if self.ws_manager.connected else "Offline"
         status_color = (100, 220, 100) if self.ws_manager.connected else (255, 100, 100)
         status_text = FONT_SMALL.render(status, True, status_color)
         self.screen.blit(status_text, (SCREEN_WIDTH - 150, 10))
         
-        # Draw player info
         self._draw_player_info()
         
-        # Draw game sections
         self._draw_shop()
-        self._draw_hand()
         self._draw_board()
         
-        # Draw UI elements
         self.timer.draw(self.screen)
         for button in self.buttons:
             button.draw(self.screen)
         
-        # Draw log
         self._draw_log()
         
-        # Draw dragging card last (on top)
         if self.dragging_card:
             self.dragging_card.draw(self.screen, 
                                    self.dragging_card.x, 
                                    self.dragging_card.y,
                                    show_cost=(self.drag_source == "shop"))
         
-        # Draw phase indicator
         phase_text = FONT_NORMAL.render(f"Phase: {self.phase}", True, COLORS["text"])
         self.screen.blit(phase_text, (20, SCREEN_HEIGHT - 30))
     
     def _draw_player_info(self):
-        """Draw player information"""
         if not self.current_player:
             return
         
-        # Hero name and health
         hero_text = FONT_NORMAL.render(self.current_player.hero_name, True, (255, 255, 200))
         self.screen.blit(hero_text, (20, 20))
         
-        # Health and gold
-        stats = f"❤ {self.current_player.health}   💰 {self.current_player.gold}   🏰 T{self.current_player.tavern_tier}"
+        stats = f"Health: {self.current_player.health}   Gold: {self.current_player.gold}   Tier: {self.current_player.tavern_tier}"
         stats_text = FONT_NORMAL.render(stats, True, COLORS["text"])
         self.screen.blit(stats_text, (20, 50))
         
-        # Shop freeze indicator
         if self.current_player.shop_frozen:
-            freeze_text = FONT_SMALL.render("❄ FROZEN", True, COLORS["shop"])
+            freeze_text = FONT_SMALL.render("FROZEN", True, COLORS["shop"])
             self.screen.blit(freeze_text, (200, 50))
     
     def _draw_shop(self):
-        """Draw shop section"""
         if not self.current_player:
             return
             
@@ -972,28 +820,11 @@ class GameClient:
             if card and card != self.dragging_card:
                 card.draw(self.screen, x, y, show_cost=True)
             elif card is None:
-                # Draw empty slot
                 slot = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
                 pygame.draw.rect(self.screen, (30, 40, 60), slot, border_radius=6)
                 pygame.draw.rect(self.screen, (60, 80, 100), slot, 1, border_radius=6)
     
-    def _draw_hand(self):
-        """Draw hand section"""
-        if not self.current_player:
-            return
-            
-        title = FONT_NORMAL.render("HAND", True, COLORS["hand"])
-        self.screen.blit(title, (self.current_player.hand_pos[0],
-                                self.current_player.hand_pos[1] - 25))
-        
-        for i, card in enumerate(self.current_player.hand):
-            if card and card != self.dragging_card:
-                x = self.current_player.hand_pos[0] + i * (CARD_WIDTH + 5)
-                y = self.current_player.hand_pos[1]
-                card.draw(self.screen, x, y)
-    
     def _draw_board(self):
-        """Draw board section"""
         if not self.current_player:
             return
             
@@ -1001,7 +832,6 @@ class GameClient:
         self.screen.blit(title, (self.current_player.board_pos[0],
                                 self.current_player.board_pos[1] - 25))
         
-        # Board background
         board_bg = pygame.Rect(
             self.current_player.board_pos[0] - 5,
             self.current_player.board_pos[1] - 5,
@@ -1011,7 +841,6 @@ class GameClient:
         pygame.draw.rect(self.screen, (35, 45, 65), board_bg, border_radius=8)
         pygame.draw.rect(self.screen, (70, 100, 140), board_bg, 1, border_radius=8)
         
-        # Draw board cards
         for i in range(BOARD_SLOTS):
             x = self.current_player.board_pos[0] + i * (CARD_WIDTH + 5)
             y = self.current_player.board_pos[1]
@@ -1021,12 +850,10 @@ class GameClient:
                 if card and card != self.dragging_card:
                     card.draw(self.screen, x, y)
                 elif card is None:
-                    # Empty slot indicator
                     pygame.draw.rect(self.screen, (50, 60, 80), 
                                     (x, y, CARD_WIDTH, CARD_HEIGHT), 1, border_radius=6)
     
     def _draw_log(self):
-        """Draw event log"""
         log_bg = pygame.Rect(SCREEN_WIDTH - 300, SCREEN_HEIGHT - 180, 280, 160)
         pygame.draw.rect(self.screen, (25, 35, 55), log_bg, border_radius=6)
         pygame.draw.rect(self.screen, (60, 80, 110), log_bg, 1, border_radius=6)
@@ -1034,18 +861,14 @@ class GameClient:
         log_title = FONT_SMALL.render("EVENT LOG", True, COLORS["text"])
         self.screen.blit(log_title, (SCREEN_WIDTH - 290, SCREEN_HEIGHT - 170))
         
-        # Draw log messages
         y_offset = SCREEN_HEIGHT - 145
-        for message in self.log[-6:]:  # Last 6 messages
+        for message in self.log[-6:]:
             text = FONT_SMALL.render(message, True, (200, 220, 255))
             self.screen.blit(text, (SCREEN_WIDTH - 290, y_offset))
             y_offset += 22
     
     async def _update_from_server(self, message):
-        """بروزرسانی وضعیت بازی از سرور"""
         try:
-            # اینجا باید منطق بروزرسانی وضعیت بازی را بنویسید
-            # به عنوان مثال:
             players_data = message.get("players", [])
             if players_data:
                 self.players = [Player(p) for p in players_data]
@@ -1057,10 +880,9 @@ class GameClient:
             self._add_log(f"Game state updated from server (Phase: {phase})")
             
         except Exception as e:
-            print(f"❌ Error updating from server: {e}")
+            print(f"Error updating from server: {e}")
     
     async def _update_shop(self, message):
-        """بروزرسانی فروشگاه"""
         if not self.current_player:
             return
             
@@ -1068,20 +890,15 @@ class GameClient:
         gold = message.get("gold", self.current_player.gold)
         
         self.current_player.gold = gold
-        
-        # بروزرسانی کارت‌های فروشگاه
-        # (باید بر اساس ساختار پیام سرور تنظیم شود)
         self._add_log("Shop updated from server")
     
     async def _start_combat_replay(self, message):
-        """شروع replay نبرد"""
         combat_log = message.get("log", [])
         seed = message.get("seed", 0)
         
         self.phase = "COMBAT"
         self._add_log(f"Starting combat replay (Seed: {seed})")
         
-        # نمایش لاگ نبرد
         for entry in combat_log:
             p1 = entry.get("p1", "Player1")
             p2 = entry.get("p2", "Player2")
@@ -1089,16 +906,11 @@ class GameClient:
             self._add_log(f"{p1} vs {p2}: {damage} damage")
     
     def _find_card_slot(self, card, location):
-        """پیدا کردن slot کارت"""
         if not self.current_player:
             return -1
             
         if location == "shop":
             for i, c in enumerate(self.current_player.shop):
-                if c and c.instance_id == card.instance_id:
-                    return i
-        elif location == "hand":
-            for i, c in enumerate(self.current_player.hand):
                 if c and c.instance_id == card.instance_id:
                     return i
         elif location == "board":
@@ -1108,13 +920,11 @@ class GameClient:
         return -1
     
     def run(self):
-        """Main game loop"""
         print("=" * 50)
         print("MAW BATTLEGROUNDS - Lightweight Frontend")
         print("=" * 50)
         print("Controls:")
         print("• Drag SHOP cards to BOARD to buy")
-        print("• Drag HAND cards to BOARD to play")
         print("• Drag BOARD cards away to sell")
         print("• Right-click BOARD cards to quick sell")
         print("• R: Refresh shop | F: Freeze shop")
@@ -1122,40 +932,29 @@ class GameClient:
         print("=" * 50)
         
         while self.running:
-            # Limit FPS to 30 for better performance
             dt = self.clock.tick(30) / 1000.0
             
-            # Handle events
             self.handle_events()
-            
-            # Update game state
             self.update(dt)
-            
-            # Draw everything
             self.draw()
             
-            # Update display
             pygame.display.flip()
         
-        # Clean up
         self.ws_manager.disconnect()
         pygame.quit()
         sys.exit()
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    # Create data directory if needed
     if not os.path.exists('data'):
         os.makedirs('data')
         print("Created 'data' directory")
     
-    # Run the game
     try:
         game = GameClient()
         game.run()
     except pygame.error as e:
         print(f"PyGame Error: {e}")
-        print("Your system may not support hardware acceleration.")
         print("Try running with software rendering:")
         print("  Set environment variable: SDL_VIDEODRIVER=windib")
     except Exception as e:
