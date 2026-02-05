@@ -5,7 +5,12 @@ import pygame
 import sys
 import json
 import os
+import time
 from typing import List, Dict, Optional, Tuple
+
+import asyncio
+import websockets
+import threading
 
 # ==================== INITIALIZATION ====================
 pygame.init()
@@ -49,6 +54,138 @@ pygame.font.init()
 FONT_TITLE = pygame.font.SysFont(None, 36)   # Reduced from 48
 FONT_NORMAL = pygame.font.SysFont(None, 24)
 FONT_SMALL = pygame.font.SysFont(None, 18)
+
+class WebSocketManager:
+    """مدیریت اتصال WebSocket به سرور"""
+    
+    def __init__(self, game_client):
+        self.game = game_client
+        self.ws = None
+        self.running = False
+        self.connected = False
+        self.token = None
+        self.reconnect_delay = 3  # ثانیه
+        self.uri = "ws://localhost:8888"  # آدرس سرور
+        self.loop = None
+        
+    def start(self):
+        """شروع اتصال در thread جداگانه"""
+        self.running = True
+        thread = threading.Thread(target=self._run_async, daemon=True)
+        thread.start()
+        return thread
+    
+    def _run_async(self):
+        """اجرای async loop در thread جداگانه"""
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self._connect())
+    
+    async def _connect(self):
+        """اتصال به سرور"""
+        while self.running:
+            try:
+                print(f"📡 Connecting to {self.uri}...")
+                self.ws = await websockets.connect(self.uri, ping_interval=10)
+                self.connected = True
+                print("✅ Connected to server")
+                
+                # شروع دریافت پیام‌ها
+                await self.receive_messages()
+                
+            except Exception as e:
+                print(f"❌ Connection failed: {e}")
+                self.connected = False
+                if self.running:
+                    print(f"🔄 Reconnecting in {self.reconnect_delay} seconds...")
+                    await asyncio.sleep(self.reconnect_delay)
+    
+    async def receive_messages(self):
+        """دریافت پیام‌ها از سرور"""
+        try:
+            async for message in self.ws:
+                await self.handle_message(message)
+        except websockets.exceptions.ConnectionClosed:
+            print("🔌 Connection closed by server")
+            self.connected = False
+        except Exception as e:
+            print(f"❌ Error receiving messages: {e}")
+            self.connected = False
+    
+    async def handle_message(self, message_str):
+        """پردازش پیام دریافتی از سرور"""
+        try:
+            message = json.loads(message_str)
+            message_type = message.get("type", "")
+            
+            print(f"📥 Received: {message_type}")
+            
+            if message_type == "WELCOME":
+                self.token = message.get("token")
+                print(f"🔑 Token received: {self.token}")
+                self.game.offline_mode = False
+                self.game._add_log("Connected to server!")
+                
+            elif message_type == "FULL_STATE":
+                # بروزرسانی کامل وضعیت بازی
+                await self.game._update_from_server(message)
+                
+            elif message_type == "SHOP_UPDATE":
+                # بروزرسانی فروشگاه
+                await self.game._update_shop(message)
+                
+            elif message_type == "phase_change":
+                self.game.phase = message.get("phase", "RECRUIT")
+                self.game._add_log(f"Phase changed to: {self.game.phase}")
+                
+            elif message_type == "error":
+                error_msg = message.get("message", "Unknown error")
+                self.game._add_log(f"Server error: {error_msg}", True)
+                
+            elif message_type == "combat_log":
+                await self.game._start_combat_replay(message)
+                
+            elif message_type == "game_over":
+                winner = message.get("winner", "none")
+                self.game._add_log(f"🎮 Game Over! Winner: {winner}")
+                
+        except Exception as e:
+            print(f"❌ Error handling message: {e}")
+    
+    async def send_action(self, action_type, payload=None):
+        """ارسال اکشن به سرور"""
+        if not self.connected or not self.ws:
+            self.game._add_log("Not connected to server!", True)
+            return False
+        
+        try:
+            action = {
+                "action": action_type,
+                "token": self.token,
+                "timestamp": time.time(),
+            }
+            
+            if self.game.current_player and hasattr(self.game.current_player, 'get'):
+                action["version"] = self.game.current_player.get("version", 0)
+            
+            if payload:
+                action["payload"] = payload
+            
+            await self.ws.send(json.dumps(action))
+            print(f"📤 Sent: {action_type}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error sending action: {e}")
+            self.connected = False
+            return False
+    
+    def disconnect(self):
+        """قطع اتصال"""
+        self.running = False
+        self.connected = False
+        if self.ws:
+            asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
 
 # ==================== CARD CLASS ====================
 class Card:
@@ -317,6 +454,10 @@ class GameClient:
         self.running = True
         self.offline_mode = True
         
+        # WebSocket connection
+        self.ws_manager = WebSocketManager(self)
+        self.ws_thread = None
+        
         # Game state
         self.phase = "RECRUIT"
         self.players = self._load_game_data()
@@ -336,6 +477,14 @@ class GameClient:
             "Drag cards to interact",
             "Right-click to sell cards"
         ]
+        
+        # شروع اتصال WebSocket
+        self.start_websocket()
+    
+    def start_websocket(self):
+        """شروع اتصال WebSocket"""
+        print("🌐 Starting WebSocket connection...")
+        self.ws_thread = self.ws_manager.start()
     
     def _load_game_data(self) -> List[Player]:
         """Load game data from file or create default"""
@@ -410,6 +559,13 @@ class GameClient:
             self.log.pop(0)
         print(f"[LOG] {message}")
     
+    async def _send_to_server(self, action_type, payload=None):
+        """ارسال غیرهمزمان به سرور"""
+        if self.ws_manager.connected:
+            await self.ws_manager.send_action(action_type, payload)
+        else:
+            self._add_log("Not connected to server", True)
+    
     def handle_events(self):
         """Handle all PyGame events"""
         mouse_pos = pygame.mouse.get_pos()
@@ -455,6 +611,9 @@ class GameClient:
     
     def _handle_left_click(self, mouse_pos: Tuple[int, int]):
         """Handle left mouse click for card dragging"""
+        if not self.current_player:
+            return
+            
         # Check shop cards
         for card in self.current_player.shop:
             if card and card.contains_point(mouse_pos):
@@ -481,16 +640,31 @@ class GameClient:
     
     def _handle_right_click(self, mouse_pos: Tuple[int, int]):
         """Handle right click for quick sell"""
+        if not self.current_player:
+            return
+            
         for i, card in enumerate(self.current_player.board):
             if card and card.contains_point(mouse_pos):
-                self.current_player.gold += 1
-                self.current_player.board[i] = None
-                self._add_log(f"Sold {card.name} (+1 gold)")
+                if self.offline_mode:
+                    # منطق آفلاین
+                    self.current_player.gold += 1
+                    self.current_player.board[i] = None
+                    self._add_log(f"Sold {card.name} (+1 gold)")
+                else:
+                    # ارسال به سرور
+                    payload = {
+                        "instance_id": card.instance_id,
+                        "slot": i
+                    }
+                    asyncio.run_coroutine_threadsafe(
+                        self._send_to_server("SELL_MINION", payload),
+                        self.ws_manager.loop
+                    )
                 return
     
     def _handle_card_drop(self, mouse_pos: Tuple[int, int]):
         """Handle card drop after dragging"""
-        if not self.dragging_card:
+        if not self.dragging_card or not self.current_player:
             return
         
         # Define board drop zone
@@ -517,56 +691,108 @@ class GameClient:
     
     def _buy_card(self):
         """Buy card from shop"""
-        if self.current_player.gold < self.dragging_card.cost:
-            self._add_log("Not enough gold!", True)
+        if not self.dragging_card or not self.current_player:
             return
-        
-        # Find and remove from shop
-        for i, card in enumerate(self.current_player.shop):
-            if card and card.instance_id == self.dragging_card.instance_id:
-                self.current_player.shop[i] = None
-                break
-        
-        # Add to hand
-        self.current_player.hand.append(self.dragging_card)
-        self.current_player.gold -= self.dragging_card.cost
-        self._add_log(f"Bought {self.dragging_card.name} (-{self.dragging_card.cost}g)")
+            
+        if self.offline_mode:
+            # منطق آفلاین
+            if self.current_player.gold < self.dragging_card.cost:
+                self._add_log("Not enough gold!", True)
+                return
+            
+            # Find and remove from shop
+            for i, card in enumerate(self.current_player.shop):
+                if card and card.instance_id == self.dragging_card.instance_id:
+                    self.current_player.shop[i] = None
+                    break
+            
+            # Add to hand
+            self.current_player.hand.append(self.dragging_card)
+            self.current_player.gold -= self.dragging_card.cost
+            self._add_log(f"Bought {self.dragging_card.name} (-{self.dragging_card.cost}g)")
+        else:
+            # ارسال به سرور
+            shop_slot = self._find_card_slot(self.dragging_card, "shop")
+            if shop_slot >= 0:
+                payload = {
+                    "shop_slot": shop_slot,
+                    "card_id": self.dragging_card.card_id,
+                    "expected_cost": self.dragging_card.cost
+                }
+                asyncio.run_coroutine_threadsafe(
+                    self._send_to_server("BUY_MINION", payload),
+                    self.ws_manager.loop
+                )
     
     def _play_card(self):
         """Play card from hand to board"""
-        # Find empty board slot
-        empty_slot = -1
-        for i in range(len(self.current_player.board)):
-            if self.current_player.board[i] is None:
-                empty_slot = i
-                break
-        
-        if empty_slot == -1 and len(self.current_player.board) < BOARD_SLOTS:
-            empty_slot = len(self.current_player.board)
-        
-        if empty_slot == -1:
-            self._add_log("Board is full!", True)
+        if not self.dragging_card or not self.current_player:
             return
-        
-        # Remove from hand, add to board
-        self.current_player.hand = [c for c in self.current_player.hand 
-                                  if c.instance_id != self.dragging_card.instance_id]
-        
-        if empty_slot < len(self.current_player.board):
-            self.current_player.board[empty_slot] = self.dragging_card
+            
+        if self.offline_mode:
+            # منطق آفلاین
+            # Find empty board slot
+            empty_slot = -1
+            for i in range(len(self.current_player.board)):
+                if self.current_player.board[i] is None:
+                    empty_slot = i
+                    break
+            
+            if empty_slot == -1 and len(self.current_player.board) < BOARD_SLOTS:
+                empty_slot = len(self.current_player.board)
+            
+            if empty_slot == -1:
+                self._add_log("Board is full!", True)
+                return
+            
+            # Remove from hand, add to board
+            self.current_player.hand = [c for c in self.current_player.hand 
+                                      if c.instance_id != self.dragging_card.instance_id]
+            
+            if empty_slot < len(self.current_player.board):
+                self.current_player.board[empty_slot] = self.dragging_card
+            else:
+                self.current_player.board.append(self.dragging_card)
+            
+            self._add_log(f"Played {self.dragging_card.name}")
         else:
-            self.current_player.board.append(self.dragging_card)
-        
-        self._add_log(f"Played {self.dragging_card.name}")
+            # ارسال به سرور
+            hand_slot = self._find_card_slot(self.dragging_card, "hand")
+            if hand_slot >= 0:
+                payload = {
+                    "hand_slot": hand_slot,
+                    "instance_id": self.dragging_card.instance_id
+                }
+                asyncio.run_coroutine_threadsafe(
+                    self._send_to_server("PLAY_MINION", payload),
+                    self.ws_manager.loop
+                )
     
     def _sell_card(self):
         """Sell card from board"""
-        for i, card in enumerate(self.current_player.board):
-            if card and card.instance_id == self.dragging_card.instance_id:
-                self.current_player.board[i] = None
-                self.current_player.gold += 1
-                self._add_log(f"Sold {card.name} (+1 gold)")
-                return
+        if not self.dragging_card or not self.current_player:
+            return
+            
+        if self.offline_mode:
+            # منطق آفلاین
+            for i, card in enumerate(self.current_player.board):
+                if card and card.instance_id == self.dragging_card.instance_id:
+                    self.current_player.board[i] = None
+                    self.current_player.gold += 1
+                    self._add_log(f"Sold {card.name} (+1 gold)")
+                    return
+        else:
+            # ارسال به سرور
+            board_slot = self._find_card_slot(self.dragging_card, "board")
+            if board_slot >= 0:
+                payload = {
+                    "instance_id": self.dragging_card.instance_id,
+                    "slot": board_slot
+                }
+                asyncio.run_coroutine_threadsafe(
+                    self._send_to_server("SELL_MINION", payload),
+                    self.ws_manager.loop
+                )
     
     def _handle_button_click(self, action: str):
         """Handle button clicks"""
@@ -583,41 +809,82 @@ class GameClient:
     
     def _handle_refresh(self):
         """Refresh shop"""
-        if self.current_player.gold >= 1:
-            self.current_player.gold -= 1
-            # Simplified refresh - just mark shop as changed
-            self._add_log("Shop refreshed (-1 gold)")
+        if self.offline_mode:
+            # منطق آفلاین
+            if self.current_player.gold >= 1:
+                self.current_player.gold -= 1
+                self._add_log("Shop refreshed (-1 gold)")
+            else:
+                self._add_log("Not enough gold to refresh!", True)
         else:
-            self._add_log("Not enough gold to refresh!", True)
+            # ارسال به سرور
+            asyncio.run_coroutine_threadsafe(
+                self._send_to_server("REFRESH_SHOP"),
+                self.ws_manager.loop
+            )
     
     def _handle_freeze(self):
         """Toggle shop freeze"""
-        self.current_player.shop_frozen = not self.current_player.shop_frozen
-        status = "frozen" if self.current_player.shop_frozen else "unfrozen"
-        self._add_log(f"Shop {status}")
+        if self.offline_mode:
+            # منطق آفلاین
+            self.current_player.shop_frozen = not self.current_player.shop_frozen
+            status = "frozen" if self.current_player.shop_frozen else "unfrozen"
+            self._add_log(f"Shop {status}")
+        else:
+            # ارسال به سرور
+            asyncio.run_coroutine_threadsafe(
+                self._send_to_server("TOGGLE_FREEZE"),
+                self.ws_manager.loop
+            )
     
     def _handle_end_turn(self):
         """End current turn"""
-        self.timer.time_left = 0  # Force timer to end
-        self._add_log("Turn ended")
+        if self.offline_mode:
+            self.timer.time_left = 0
+            self._add_log("Turn ended")
+        else:
+            asyncio.run_coroutine_threadsafe(
+                self._send_to_server("END_TURN"),
+                self.ws_manager.loop
+            )
     
     def _handle_upgrade(self):
         """Upgrade tavern tier"""
         cost = 5  # Simplified cost
-        if self.current_player.gold >= cost:
-            self.current_player.gold -= cost
-            self.current_player.tavern_tier += 1
-            self._add_log(f"Tavern upgraded to tier {self.current_player.tavern_tier} (-{cost}g)")
+        if self.offline_mode:
+            # منطق آفلاین
+            if self.current_player.gold >= cost:
+                self.current_player.gold -= cost
+                self.current_player.tavern_tier += 1
+                self._add_log(f"Tavern upgraded to tier {self.current_player.tavern_tier} (-{cost}g)")
+            else:
+                self._add_log("Not enough gold to upgrade!", True)
         else:
-            self._add_log("Not enough gold to upgrade!", True)
+            # ارسال به سرور
+            payload = {
+                "current_tier": self.current_player.tavern_tier,
+                "expected_cost": cost
+            }
+            asyncio.run_coroutine_threadsafe(
+                self._send_to_server("UPGRADE_TAVERN", payload),
+                self.ws_manager.loop
+            )
     
     def _handle_hero_power(self):
         """Use hero power"""
-        if not self.current_player.hero_power_used:
-            self.current_player.hero_power_used = True
-            self._add_log(f"{self.current_player.hero_name} hero power used")
+        if self.offline_mode:
+            # منطق آفلاین
+            if not self.current_player.hero_power_used:
+                self.current_player.hero_power_used = True
+                self._add_log(f"{self.current_player.hero_name} hero power used")
+            else:
+                self._add_log("Hero power already used this turn", True)
         else:
-            self._add_log("Hero power already used this turn", True)
+            # ارسال به سرور
+            asyncio.run_coroutine_threadsafe(
+                self._send_to_server("USE_HERO_POWER"),
+                self.ws_manager.loop
+            )
     
     def update(self, dt: float):
         """Update game state"""
@@ -636,6 +903,12 @@ class GameClient:
         # Draw title
         title = FONT_TITLE.render("MAW BATTLEGROUNDS", True, COLORS["gold"])
         self.screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, 10))
+        
+        # Draw connection status
+        status = "🌐 Connected" if self.ws_manager.connected else "🔴 Offline"
+        status_color = (100, 220, 100) if self.ws_manager.connected else (255, 100, 100)
+        status_text = FONT_SMALL.render(status, True, status_color)
+        self.screen.blit(status_text, (SCREEN_WIDTH - 150, 10))
         
         # Draw player info
         self._draw_player_info()
@@ -685,6 +958,9 @@ class GameClient:
     
     def _draw_shop(self):
         """Draw shop section"""
+        if not self.current_player:
+            return
+            
         title = FONT_NORMAL.render("SHOP", True, COLORS["shop"])
         self.screen.blit(title, (self.current_player.shop_pos[0], 
                                 self.current_player.shop_pos[1] - 25))
@@ -703,6 +979,9 @@ class GameClient:
     
     def _draw_hand(self):
         """Draw hand section"""
+        if not self.current_player:
+            return
+            
         title = FONT_NORMAL.render("HAND", True, COLORS["hand"])
         self.screen.blit(title, (self.current_player.hand_pos[0],
                                 self.current_player.hand_pos[1] - 25))
@@ -715,6 +994,9 @@ class GameClient:
     
     def _draw_board(self):
         """Draw board section"""
+        if not self.current_player:
+            return
+            
         title = FONT_NORMAL.render("BOARD", True, COLORS["board"])
         self.screen.blit(title, (self.current_player.board_pos[0],
                                 self.current_player.board_pos[1] - 25))
@@ -759,6 +1041,72 @@ class GameClient:
             self.screen.blit(text, (SCREEN_WIDTH - 290, y_offset))
             y_offset += 22
     
+    async def _update_from_server(self, message):
+        """بروزرسانی وضعیت بازی از سرور"""
+        try:
+            # اینجا باید منطق بروزرسانی وضعیت بازی را بنویسید
+            # به عنوان مثال:
+            players_data = message.get("players", [])
+            if players_data:
+                self.players = [Player(p) for p in players_data]
+                self.current_player = self.players[0]
+            
+            phase = message.get("phase", "RECRUIT")
+            self.phase = phase
+            
+            self._add_log(f"Game state updated from server (Phase: {phase})")
+            
+        except Exception as e:
+            print(f"❌ Error updating from server: {e}")
+    
+    async def _update_shop(self, message):
+        """بروزرسانی فروشگاه"""
+        if not self.current_player:
+            return
+            
+        shop_data = message.get("shop", {})
+        gold = message.get("gold", self.current_player.gold)
+        
+        self.current_player.gold = gold
+        
+        # بروزرسانی کارت‌های فروشگاه
+        # (باید بر اساس ساختار پیام سرور تنظیم شود)
+        self._add_log("Shop updated from server")
+    
+    async def _start_combat_replay(self, message):
+        """شروع replay نبرد"""
+        combat_log = message.get("log", [])
+        seed = message.get("seed", 0)
+        
+        self.phase = "COMBAT"
+        self._add_log(f"Starting combat replay (Seed: {seed})")
+        
+        # نمایش لاگ نبرد
+        for entry in combat_log:
+            p1 = entry.get("p1", "Player1")
+            p2 = entry.get("p2", "Player2")
+            damage = entry.get("damage", 0)
+            self._add_log(f"{p1} vs {p2}: {damage} damage")
+    
+    def _find_card_slot(self, card, location):
+        """پیدا کردن slot کارت"""
+        if not self.current_player:
+            return -1
+            
+        if location == "shop":
+            for i, c in enumerate(self.current_player.shop):
+                if c and c.instance_id == card.instance_id:
+                    return i
+        elif location == "hand":
+            for i, c in enumerate(self.current_player.hand):
+                if c and c.instance_id == card.instance_id:
+                    return i
+        elif location == "board":
+            for i, c in enumerate(self.current_player.board):
+                if c and c.instance_id == card.instance_id:
+                    return i
+        return -1
+    
     def run(self):
         """Main game loop"""
         print("=" * 50)
@@ -790,6 +1138,7 @@ class GameClient:
             pygame.display.flip()
         
         # Clean up
+        self.ws_manager.disconnect()
         pygame.quit()
         sys.exit()
 
