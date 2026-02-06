@@ -1,964 +1,1301 @@
-# MAW Battlegrounds - Lightweight Frontend
-# Optimized for performance, complete single-file implementation
-
+# client.py - Hearthstone Battlegrounds Client
 import pygame
 import sys
-import json
 import os
-import time
-from typing import List, Dict, Optional, Tuple
-
+import json
 import asyncio
 import websockets
 import threading
+import queue
+import uuid
+from datetime import datetime
 
-# ==================== INITIALIZATION ====================
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
+import random
+import math
+
+# Local imports
+from assets.minions.minions import create_minion, MinionManager
+
+# Initialize pygame
 pygame.init()
 
-# Optimized screen dimensions
-SCREEN_WIDTH = 1024
-SCREEN_HEIGHT = 768
-CARD_WIDTH = 100
-CARD_HEIGHT = 140
+# Screen setup
+screen = pygame.display.set_mode((800, 700))
+pygame.display.set_caption("Hearthstone Battlegrounds - Client")
+icon = pygame.image.load("./image_add/Screenshot 2025-11-27 151541.png")
+pygame.display.set_icon(icon)
 
-# Game constants
-SHOP_SLOTS = 5
-BOARD_SLOTS = 7
-START_GOLD = 3
-MAX_GOLD = 10
-TURN_DURATION = 30.0
+# Load background
+game_bg = pygame.transform.scale(
+    pygame.image.load(r"./image_add/Screenshot 2025-12-16 175133.png"),
+    (800, 700)
+)
 
-# Optimized color palette
-COLORS = {
-    "bg": (15, 20, 35),
-    "card_bg": (40, 50, 75),
-    "card_border": (80, 130, 200),
-    "gold": (255, 215, 0),
-    "health": (255, 80, 80),
-    "text": (230, 230, 230),
-    "shop": (100, 180, 255),
-    "board": (220, 160, 100),
-    "button": (70, 130, 180),
-    "button_hover": (90, 160, 220),
-    "taunt": (180, 140, 60),
-    "divine_shield": (180, 220, 255),
-    "reborn": (200, 100, 200),
-    "error": (255, 100, 100),
-    "success": (100, 220, 100),
-}
+clock = pygame.time.Clock()
 
-# Simple font initialization
-pygame.font.init()
-FONT_TITLE = pygame.font.SysFont(None, 36)
-FONT_NORMAL = pygame.font.SysFont(None, 24)
-FONT_SMALL = pygame.font.SysFont(None, 18)
+# ============================================================================
+# NETWORK MANAGER - WebSocket Communication
+# ============================================================================
 
-# ==================== WEB SOCKET MANAGER ====================
-class WebSocketManager:
-    def __init__(self, game_client):
-        self.game = game_client
+class NetworkManager:
+    def __init__(self, server_url="ws://localhost:8888"):
+        self.server_url = server_url
         self.ws = None
-        self.running = False
         self.connected = False
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 5
         self.token = None
-        self.reconnect_delay = 3
-        self.uri = "ws://localhost:8888"
-        self.loop = None
+        self.player_id = None
+        
+        # Message queues
+        self.incoming_queue = queue.Queue()
+        self.outgoing_queue = queue.Queue()
+        
+        # Thread control
+        self.network_thread = None
+        self.running = False
         
     def start(self):
+        """Start network thread"""
         self.running = True
-        thread = threading.Thread(target=self._run_async, daemon=True)
-        thread.start()
-        return thread
-    
-    def _run_async(self):
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self._connect())
-    
-    async def _connect(self):
-        while self.running:
-            try:
-                print(f"Connecting to {self.uri}...")
-                self.ws = await websockets.connect(self.uri, ping_interval=10)
-                self.connected = True
-                print("Connected to server")
-                await self.receive_messages()
-            except Exception as e:
-                print(f"Connection failed: {e}")
-                self.connected = False
-                if self.running:
-                    print(f"Reconnecting in {self.reconnect_delay} seconds...")
-                    await asyncio.sleep(self.reconnect_delay)
-    
-    async def receive_messages(self):
-        try:
-            async for message in self.ws:
-                await self.handle_message(message)
-        except websockets.exceptions.ConnectionClosed:
-            print("Connection closed by server")
-            self.connected = False
-        except Exception as e:
-            print(f"Error receiving messages: {e}")
-            self.connected = False
-    
-    async def handle_message(self, message_str):
-        try:
-            message = json.loads(message_str)
-            message_type = message.get("type", "")
-            
-            print(f"Received: {message_type}")
-            
-            if message_type == "WELCOME":
-                self.token = message.get("token")
-                print(f"Token received: {self.token}")
-                self.game.offline_mode = False
-                self.game._add_log("Connected to server!")
-                
-            elif message_type == "FULL_STATE":
-                await self.game._update_from_server(message)
-                
-            elif message_type == "SHOP_UPDATE":
-                await self.game._update_shop(message)
-                
-            elif message_type == "phase_change":
-                self.game.phase = message.get("phase", "RECRUIT")
-                self.game._add_log(f"Phase changed to: {self.game.phase}")
-                
-            elif message_type == "error":
-                error_msg = message.get("message", "Unknown error")
-                self.game._add_log(f"Server error: {error_msg}", True)
-                
-            elif message_type == "combat_log":
-                await self.game._start_combat_replay(message)
-                
-            elif message_type == "game_over":
-                winner = message.get("winner", "none")
-                self.game._add_log(f"Game Over! Winner: {winner}")
-                
-        except Exception as e:
-            print(f"Error handling message: {e}")
-    
-    async def send_action(self, action_type, payload=None):
-        if not self.connected or not self.ws:
-            self.game._add_log("Not connected to server!", True)
-            return False
+        self.network_thread = threading.Thread(target=self._network_loop, daemon=True)
+        self.network_thread.start()
         
-        try:
-            action = {
-                "action": action_type,
-                "token": self.token,
-                "timestamp": time.time(),
-            }
-            
-            if self.game.current_player and hasattr(self.game.current_player, 'get'):
-                action["version"] = self.game.current_player.get("version", 0)
-            
-            if payload:
-                action["payload"] = payload
-            
-            await self.ws.send(json.dumps(action))
-            print(f"Sent: {action_type}")
-            return True
-            
-        except Exception as e:
-            print(f"Error sending action: {e}")
-            self.connected = False
-            return False
-    
-    def disconnect(self):
+    def stop(self):
+        """Stop network thread"""
         self.running = False
-        self.connected = False
         if self.ws:
-            asyncio.run_coroutine_threadsafe(self.ws.close(), self.loop)
-
-# ==================== CARD CLASS ====================
-class Card:
-    def __init__(self, data: Dict):
-        self.card_id = data.get("card_id", "UNKNOWN")
-        self.name = data.get("name", "Unknown")
-        self.attack = data.get("attack", 1)
-        self.health = data.get("health", 1)
-        self.tier = data.get("tier", 1)
-        self.cost = data.get("cost", 3)
-        self.instance_id = data.get("instance_id", f"inst_{id(self)}")
-        self.is_golden = data.get("is_golden", False)
-        self.keywords = data.get("keywords", [])
-        self.has_divine_shield = data.get("has_divine_shield", False)
-        
-        self.x = 0
-        self.y = 0
-        self.width = CARD_WIDTH
-        self.height = CARD_HEIGHT
-        self.is_dragging = False
-        self.drag_offset = (0, 0)
-        
-        self.color = self._calculate_color()
-    
-    def _calculate_color(self):
-        tier_colors = [
-            (100, 100, 100),
-            (80, 150, 80),
-            (80, 150, 200),
-            (180, 120, 220),
-            (220, 160, 60),
-            (220, 80, 80),
-        ]
-        tier_idx = min(self.tier, len(tier_colors) - 1)
-        return (255, 215, 0) if self.is_golden else tier_colors[tier_idx]
-    
-    def contains_point(self, point: Tuple[int, int]) -> bool:
-        return (self.x <= point[0] <= self.x + self.width and 
-                self.y <= point[1] <= self.y + self.height)
-    
-    def start_drag(self, mouse_pos: Tuple[int, int]):
-        self.is_dragging = True
-        self.drag_offset = (mouse_pos[0] - self.x, mouse_pos[1] - self.y)
-    
-    def update_drag(self, mouse_pos: Tuple[int, int]):
-        if self.is_dragging:
-            self.x = mouse_pos[0] - self.drag_offset[0]
-            self.y = mouse_pos[1] - self.drag_offset[1]
-    
-    def stop_drag(self):
-        self.is_dragging = False
-    
-    def draw(self, surface: pygame.Surface, x: int, y: int, show_cost: bool = False):
-        self.x, self.y = x, y
-        
-        card_rect = pygame.Rect(x, y, self.width, self.height)
-        pygame.draw.rect(surface, self.color, card_rect, border_radius=8)
-        pygame.draw.rect(surface, COLORS["card_border"], card_rect, 2, border_radius=8)
-        
-        name = self.name[:12] + "..." if len(self.name) > 12 else self.name
-        name_text = FONT_SMALL.render(name, True, COLORS["text"])
-        surface.blit(name_text, (x + 5, y + 5))
-        
-        attack_text = FONT_NORMAL.render(str(self.attack), True, (255, 255, 255))
-        attack_bg = pygame.Rect(x + 5, y + self.height - 30, 25, 25)
-        pygame.draw.rect(surface, COLORS["health"], attack_bg, border_radius=12)
-        surface.blit(attack_text, (x + 10, y + self.height - 27))
-        
-        health_text = FONT_NORMAL.render(str(self.health), True, (255, 255, 255))
-        health_bg = pygame.Rect(x + self.width - 30, y + self.height - 30, 25, 25)
-        pygame.draw.rect(surface, (80, 200, 80), health_bg, border_radius=12)
-        surface.blit(health_text, (x + self.width - 25, y + self.height - 27))
-        
-        y_offset = y + 35
-        for keyword in self.keywords[:2]:
-            if keyword == "Taunt":
-                color = COLORS["taunt"]
-            elif keyword == "Divine Shield":
-                color = COLORS["divine_shield"]
-            elif keyword == "Reborn":
-                color = COLORS["reborn"]
-            else:
-                color = (180, 180, 180)
+            asyncio.run(self._close_connection())
             
-            kw_text = FONT_SMALL.render(keyword[:8], True, color)
-            surface.blit(kw_text, (x + 5, y_offset))
-            y_offset += 18
-        
-        if self.has_divine_shield:
-            shield_text = FONT_SMALL.render("S", True, COLORS["divine_shield"])
-            surface.blit(shield_text, (x + self.width - 15, y + 5))
-        
-        if show_cost:
-            cost_text = FONT_NORMAL.render(str(self.cost), True, COLORS["gold"])
-            surface.blit(cost_text, (x + self.width - 25, y + 5))
-
-# ==================== PLAYER CLASS ====================
-class Player:
-    def __init__(self, data: Dict):
-        self.player_id = data.get("player_id", "p1")
-        
-        hero_data = data.get("hero", {})
-        if isinstance(hero_data, dict):
-            self.hero_name = hero_data.get("name", "Sylvanas")
-            self.health = hero_data.get("health", 40)
-            self.hero_power_cost = hero_data.get("hero_power_cost", 1)
-            self.hero_power_used = hero_data.get("hero_power_used", False)
-        else:
-            self.hero_name = str(hero_data)
-            self.health = data.get("health", 40)
-            self.hero_power_cost = 1
-            self.hero_power_used = False
-        
-        self.gold = data.get("gold", START_GOLD)
-        self.tavern_tier = data.get("tavern_tier", 1)
-        
-        self.shop = self._parse_cards(data.get("shop", []), is_shop=True)
-        self.board = self._parse_cards(data.get("board", []))
-        
-        self.shop_frozen = data.get("flags", {}).get("shop_frozen", False)
-        
-        self.shop_pos = (30, 120)
-        self.board_pos = (30, 400)
-    
-    def _parse_cards(self, card_list: List, is_shop: bool = False) -> List:
-        cards = []
-        for item in card_list:
-            if item:
-                cards.append(Card(item))
-            elif is_shop:
-                cards.append(None)
-        return cards
-
-    def _find_empty_board_slot(self):
-        for i, card in enumerate(self.board):
-            if card is None:
-                return i
-        if len(self.board) < BOARD_SLOTS:
-            return len(self.board)
-        return -1
-
-# ==================== BUTTON CLASS ====================
-class Button:
-    def __init__(self, x: int, y: int, width: int, height: int, 
-                 text: str, action: str = ""):
-        self.rect = pygame.Rect(x, y, width, height)
-        self.text = text
-        self.action = action
-        self.is_hovered = False
-        self.enabled = True
-    
-    def draw(self, surface: pygame.Surface):
-        color = COLORS["button_hover"] if self.is_hovered else COLORS["button"]
-        if not self.enabled:
-            color = (100, 100, 120)
-        
-        pygame.draw.rect(surface, color, self.rect, border_radius=6)
-        pygame.draw.rect(surface, (255, 255, 255), self.rect, 1, border_radius=6)
-        
-        text_color = (255, 255, 255) if self.enabled else (150, 150, 150)
-        text_surf = FONT_NORMAL.render(self.text, True, text_color)
-        text_rect = text_surf.get_rect(center=self.rect.center)
-        surface.blit(text_surf, text_rect)
-    
-    def check_hover(self, mouse_pos: Tuple[int, int]) -> bool:
-        self.is_hovered = self.rect.collidepoint(mouse_pos) and self.enabled
-        return self.is_hovered
-
-# ==================== TIMER CLASS ====================
-class Timer:
-    def __init__(self, x: int, y: int):
-        self.x = x
-        self.y = y
-        self.time_left = TURN_DURATION
-        self.grace_time = 2.0
-        self.in_grace = False
-        self.active = True
-    
-    def update(self, dt: float):
-        if not self.active:
-            return
-            
-        if self.time_left > 0:
-            self.time_left -= dt
-        elif not self.in_grace:
-            self.in_grace = True
-            self.grace_time = 2.0
-        elif self.in_grace:
-            self.grace_time -= dt
-            if self.grace_time <= 0:
-                self.active = False
-    
-    def draw(self, surface: pygame.Surface):
-        bar_width = 250
-        bar_height = 20
-        
-        bg_rect = pygame.Rect(self.x, self.y, bar_width, bar_height)
-        pygame.draw.rect(surface, (40, 50, 70), bg_rect, border_radius=3)
-        
-        if self.in_grace:
-            progress = self.grace_time / 2.0
-            color = (255, 200, 50)
-            label = "GRACE"
-        else:
-            progress = self.time_left / TURN_DURATION
-            if progress > 0.5:
-                color = (80, 200, 100)
-            elif progress > 0.2:
-                color = (255, 200, 50)
-            else:
-                color = (255, 80, 80)
-            label = "RECRUIT"
-        
-        fill_width = int(bar_width * progress)
-        fill_rect = pygame.Rect(self.x, self.y, fill_width, bar_height)
-        pygame.draw.rect(surface, color, fill_rect, border_radius=3)
-        
-        pygame.draw.rect(surface, (180, 180, 200), bg_rect, 1, border_radius=3)
-        
-        time_text = f"{label}: {self.grace_time:.1f}s" if self.in_grace else f"{label}: {self.time_left:.1f}s"
-        text_surf = FONT_SMALL.render(time_text, True, (255, 255, 255))
-        text_rect = text_surf.get_rect(center=bg_rect.center)
-        surface.blit(text_surf, text_rect)
-
-# ==================== GAME CLIENT CLASS ====================
-class GameClient:
-    def __init__(self):
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("MAW Battlegrounds - Lightweight")
-        
-        self.clock = pygame.time.Clock()
-        self.running = True
-        self.offline_mode = True
-        
-        self.ws_manager = WebSocketManager(self)
-        self.ws_thread = None
-        
-        self.phase = "RECRUIT"
-        self.players = self._load_game_data()
-        self.current_player = self.players[0] if self.players else None
-        
-        self.timer = Timer(SCREEN_WIDTH - 280, 20)
-        self.buttons = self._create_buttons()
-        
-        self.dragging_card = None
-        self.drag_source = ""
-        
-        self.log = [
-            "Game started in lightweight mode",
-            "Drag shop cards to board to buy",
-            "Right-click board cards to sell"
-        ]
-        
-        self.start_websocket()
-    
-    def start_websocket(self):
-        print("Starting WebSocket connection...")
-        self.ws_thread = self.ws_manager.start()
-    
-    def _load_game_data(self) -> List[Player]:
+    async def _close_connection(self):
         try:
-            if os.path.exists('data/mock_state.json'):
-                with open('data/mock_state.json', 'r') as f:
-                    data = json.load(f)
-                players_data = data.get("players", [])
-                return [Player(p) for p in players_data]
+            await self.ws.close()
         except:
             pass
+            
+    def _network_loop(self):
+        """Main network loop running in separate thread"""
+        asyncio.run(self._async_network_loop())
         
-        return [Player({
-            "player_id": "p1",
-            "hero": {"name": "Sylvanas", "health": 40},
-            "gold": 7,
-            "tavern_tier": 2,
-            "shop": [
-                {"name": "Buzzing Vermin", "attack": 2, "health": 3, "tier": 1, 
-                 "cost": 3, "keywords": ["Taunt", "Deathrattle"]},
-                {"name": "Forest Rover", "attack": 3, "health": 2, "tier": 1,
-                 "cost": 3, "keywords": ["Battlecry"]},
-                {"name": "Scarab", "attack": 2, "health": 2, "tier": 2,
-                 "cost": 3, "keywords": ["Choose One"]},
-                None,
-                None
-            ],
-            "board": [
-                {"name": "Defender", "attack": 2, "health": 4, "tier": 2,
-                 "keywords": ["Taunt"]},
-                None, None, None, None, None, None
-            ],
-            "flags": {"shop_frozen": False}
-        })]
+    async def _async_network_loop(self):
+        """Async network loop"""
+        while self.running:
+            try:
+                async with websockets.connect(self.server_url) as websocket:
+                    self.ws = websocket
+                    self.connected = True
+                    self.reconnect_attempts = 0
+                    
+                    print(f"Connected to server at {self.server_url}")
+                    
+                    # Send initial handshake if we have token
+                    if self.token:
+                        await self._send_message({
+                            "action": "RECONNECT",
+                            "token": self.token
+                        })
+                    
+                    # Start send/receive tasks
+                    receive_task = asyncio.create_task(self._receive_messages())
+                    send_task = asyncio.create_task(self._send_messages())
+                    
+                    # Wait for tasks to complete
+                    await asyncio.gather(receive_task, send_task)
+                    
+            except Exception as e:
+                self.connected = False
+                self.reconnect_attempts += 1
+                
+                if self.reconnect_attempts <= self.max_reconnect_attempts:
+                    print(f"Connection failed ({e}), retrying in 3 seconds...")
+                    await asyncio.sleep(3)
+                else:
+                    print("Max reconnection attempts reached.")
+                    self.incoming_queue.put({
+                        "type": "error",
+                        "code": "CONNECTION_LOST",
+                        "message": "Lost connection to server"
+                    })
+                    break
+                    
+    async def _receive_messages(self):
+        """Receive messages from server"""
+        try:
+            async for message in self.ws:
+                try:
+                    data = json.loads(message)
+                    self.incoming_queue.put(data)
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse message: {e}")
+        except websockets.exceptions.ConnectionClosed:
+            print("WebSocket connection closed")
+            self.connected = False
+            
+    async def _send_messages(self):
+        """Send messages to server"""
+        while self.connected:
+            try:
+                if not self.outgoing_queue.empty():
+                    message = self.outgoing_queue.get_nowait()
+                    await self.ws.send(json.dumps(message))
+                await asyncio.sleep(0.01)  # Small delay to prevent busy waiting
+            except Exception as e:
+                print(f"Error sending message: {e}")
+                break
+                
+    async def _send_message(self, message):
+        """Send a message (internal async version)"""
+        if self.ws and self.connected:
+            await self.ws.send(json.dumps(message))
+            
+    def send(self, message):
+        """Send a message (thread-safe)"""
+        if self.connected:
+            self.outgoing_queue.put(message)
+        else:
+            print("Cannot send: Not connected to server")
+            
+    def has_messages(self):
+        """Check if there are pending messages"""
+        return not self.incoming_queue.empty()
+        
+    def get_message(self):
+        """Get next message from queue"""
+        try:
+            return self.incoming_queue.get_nowait()
+        except queue.Empty:
+            return None
+            
+    def is_connected(self):
+        """Check connection status"""
+        return self.connected
+        
+    def set_token(self, token):
+        """Set authentication token"""
+        self.token = token
+        
+    def set_player_id(self, player_id):
+        """Set player ID"""
+        self.player_id = player_id
+
+# ============================================================================
+# GAME STATE MANAGER
+# ============================================================================
+
+class GameState:
+    def __init__(self):
+        self.phase = "LOBBY"  # LOBBY, HERO_SELECT, RECRUIT, COMBAT, GAME_OVER
+        self.turn = 0
+        self.players = {}
+        self.current_player_id = None
+        self.match_id = None
+        
+        # Local player state
+        self.gold = 0
+        self.max_gold = 10
+        self.health = 40
+        self.armor = 0
+        self.tavern_tier = 1
+        self.upgrade_cost = 5
+        self.refresh_cost = 1
+        self.tavern_upgrade_discount = 0
+        
+        # Collections
+        self.board = []  # Minions on board
+        self.hand = []   # Minions in hand
+        self.shop = []   # Shop minions
+        self.graveyard = []  # Minions that died last combat
+        
+        # Flags
+        self.shop_frozen = False
+        self.hero_power_used = False
+        self.ready = False
+        self.combat_result = None
+        
+        # UI state
+        self.selected_minion = None
+        self.dragging_minion = None
+        self.hovered_slot = None
+        
+        # Timer
+        self.timer_ms = 0
+        self.last_timer_update = pygame.time.get_ticks()
+        
+    def update_from_server(self, server_state):
+        """Update state from server message"""
+        if "phase" in server_state:
+            self.phase = server_state["phase"]
+            
+        if "turn" in server_state:
+            self.turn = server_state["turn"]
+            
+        if "players" in server_state:
+            self.players = server_state["players"]
+            
+        # Update local player if exists
+        if self.current_player_id and self.current_player_id in self.players:
+            player_data = self.players[self.current_player_id]
+            
+            self.gold = player_data.get("gold", self.gold)
+            self.max_gold = player_data.get("max_gold", self.max_gold)
+            self.health = player_data.get("health", self.health)
+            self.armor = player_data.get("armor", self.armor)
+            self.tavern_tier = player_data.get("tavern_tier", self.tavern_tier)
+            self.upgrade_cost = player_data.get("upgrade_cost", self.upgrade_cost)
+            self.refresh_cost = player_data.get("refresh_cost", self.refresh_cost)
+            self.tavern_upgrade_discount = player_data.get("tavern_upgrade_discount", 0)
+            
+            # Shop
+            if "shop" in player_data:
+                self.shop = player_data["shop"]
+                
+            # Board
+            if "board" in player_data:
+                self.board = player_data["board"]
+                
+            # Hand
+            if "hand" in player_data:
+                self.hand = player_data["hand"]
+                
+            # Flags
+            if "flags" in player_data:
+                flags = player_data["flags"]
+                self.shop_frozen = flags.get("shop_frozen", self.shop_frozen)
+                self.hero_power_used = flags.get("hero_power_used", self.hero_power_used)
+                self.ready = flags.get("ready", self.ready)
+                
+            # Timer
+            if "timer_ms" in player_data:
+                self.timer_ms = player_data["timer_ms"]
+                self.last_timer_update = pygame.time.get_ticks()
+                
+    def update_timer(self):
+        """Update timer based on elapsed time"""
+        if self.timer_ms > 0:
+            current_time = pygame.time.get_ticks()
+            elapsed = current_time - self.last_timer_update
+            self.timer_ms = max(0, self.timer_ms - elapsed)
+            self.last_timer_update = current_time
+            
+    def get_minion_by_instance_id(self, instance_id):
+        """Find minion by instance ID in board, hand, or shop"""
+        # Check board
+        for minion in self.board:
+            if minion.get("instance_id") == instance_id:
+                return minion, "board"
+                
+        # Check hand
+        for minion in self.hand:
+            if minion.get("instance_id") == instance_id:
+                return minion, "hand"
+                
+        # Check shop
+        for minion in self.shop:
+            if minion and minion.get("instance_id") == instance_id:
+                return minion, "shop"
+                
+        return None, None
+        
+    def can_buy_minion(self):
+        """Check if player can buy a minion"""
+        return self.gold >= 3 and len(self.hand) < 10
+        
+    def can_refresh_shop(self):
+        """Check if player can refresh shop"""
+        return self.gold >= self.refresh_cost
+        
+    def can_upgrade_tavern(self):
+        """Check if player can upgrade tavern"""
+        actual_cost = max(self.upgrade_cost - self.tavern_upgrade_discount, 2)
+        return self.gold >= actual_cost and self.tavern_tier < 6
+        
+    def get_upgrade_cost(self):
+        """Get actual upgrade cost with discount"""
+        return max(self.upgrade_cost - self.tavern_upgrade_discount, 2)
+
+# ============================================================================
+# UI COMPONENTS
+# ============================================================================
+
+class Button:
+    def __init__(self, rect, text, color, hover_color=None, text_color=(255, 255, 255)):
+        self.rect = pygame.Rect(rect)
+        self.text = text
+        self.color = color
+        self.hover_color = hover_color or color
+        self.text_color = text_color
+        self.font = pygame.font.Font(None, 24)
+        self.enabled = True
+        
+    def draw(self, surface, mouse_pos):
+        color = self.hover_color if self.rect.collidepoint(mouse_pos) and self.enabled else self.color
+        alpha = 150 if not self.enabled else 255
+        
+        # Draw button with transparency if disabled
+        button_surface = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(button_surface, (*color, alpha), (0, 0, self.rect.width, self.rect.height), border_radius=8)
+        pygame.draw.rect(button_surface, (255, 255, 255, alpha), (0, 0, self.rect.width, self.rect.height), 2, border_radius=8)
+        
+        surface.blit(button_surface, self.rect)
+        
+        # Draw text
+        text_surface = self.font.render(self.text, True, (*self.text_color, alpha))
+        text_rect = text_surface.get_rect(center=self.rect.center)
+        surface.blit(text_surface, text_rect)
+        
+    def is_clicked(self, mouse_pos, mouse_pressed):
+        return (self.rect.collidepoint(mouse_pos) and mouse_pressed[0] and self.enabled)
+
+class GoldDisplay:
+    def __init__(self, x, y, max_gold=10):
+        self.x = x
+        self.y = y
+        self.max_gold = max_gold
+        self.crystal_size = 25
+        self.spacing = 30
+        
+    def draw(self, surface, current_gold, max_gold):
+        for i in range(self.max_gold):
+            crystal_rect = pygame.Rect(
+                self.x + i * self.spacing,
+                self.y,
+                self.crystal_size,
+                self.crystal_size
+            )
+            
+            if i < max_gold:
+                if i < current_gold:
+                    # Full gold crystal
+                    pygame.draw.rect(surface, (255, 215, 0), crystal_rect, border_radius=5)
+                    pygame.draw.rect(surface, (255, 215, 200), crystal_rect, 2, border_radius=5)
+                    
+                    # Number
+                    font = pygame.font.Font(None, 16)
+                    number = font.render(str(i + 1), True, (255, 255, 255))
+                    number_rect = number.get_rect(center=crystal_rect.center)
+                    surface.blit(number, number_rect)
+                else:
+                    # Empty crystal (available)
+                    pygame.draw.rect(surface, (150, 150, 0), crystal_rect, border_radius=5)
+                    pygame.draw.rect(surface, (200, 200, 100), crystal_rect, 2, border_radius=5)
+            else:
+                # Locked crystal
+                pygame.draw.rect(surface, (100, 100, 0), crystal_rect, border_radius=5)
+                pygame.draw.rect(surface, (150, 150, 50), crystal_rect, 2, border_radius=5)
+                
+        # Gold text
+        font = pygame.font.Font(None, 32)
+        gold_text = font.render(f"GOLD: {current_gold}/{max_gold}", True, (255, 215, 0))
+        surface.blit(gold_text, (self.x, self.y - 40))
+
+class TimerDisplay:
+    def __init__(self, x, y, width=200, height=20):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.font = pygame.font.Font(None, 20)
+        
+    def draw(self, surface, time_ms):
+        # Convert ms to seconds
+        seconds = max(0, time_ms // 1000)
+        
+        # Calculate percentage for bar
+        total_time = 30000  # 30 seconds default
+        percentage = time_ms / total_time if total_time > 0 else 0
+        
+        # Draw background bar
+        bg_rect = pygame.Rect(self.x, self.y, self.width, self.height)
+        pygame.draw.rect(surface, (50, 50, 50), bg_rect, border_radius=3)
+        
+        # Draw progress bar
+        progress_width = int(self.width * percentage)
+        progress_rect = pygame.Rect(self.x, self.y, progress_width, self.height)
+        
+        # Color based on time remaining
+        if percentage > 0.5:
+            color = (100, 255, 100)  # Green
+        elif percentage > 0.25:
+            color = (255, 255, 100)  # Yellow
+        else:
+            color = (255, 100, 100)  # Red
+            
+        pygame.draw.rect(surface, color, progress_rect, border_radius=3)
+        pygame.draw.rect(surface, (200, 200, 200), bg_rect, 2, border_radius=3)
+        
+        # Draw time text
+        time_text = self.font.render(f"Time: {seconds}s", True, (255, 255, 255))
+        surface.blit(time_text, (self.x + self.width + 10, self.y))
+
+class PlayerInfoPanel:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.font = pygame.font.Font(None, 28)
+        self.small_font = pygame.font.Font(None, 22)
+        
+    def draw(self, surface, player_state, opponent_state=None):
+        # Player info
+        player_text = self.font.render(f"Player", True, (100, 200, 255))
+        surface.blit(player_text, (self.x, self.y))
+        
+        health_text = self.small_font.render(f"Health: {player_state['health']}", True, (255, 50, 50))
+        surface.blit(health_text, (self.x, self.y + 30))
+        
+        if player_state.get('armor', 0) > 0:
+            armor_text = self.small_font.render(f"Armor: {player_state['armor']}", True, (100, 150, 255))
+            surface.blit(armor_text, (self.x, self.y + 55))
+            
+        tier_text = self.small_font.render(f"Tavern Tier: {player_state['tavern_tier']}", True, (100, 200, 255))
+        surface.blit(tier_text, (self.x, self.y + 80))
+        
+        # Turn info
+        turn_text = self.small_font.render(f"Turn: {player_state.get('turn', 1)}", True, (255, 255, 200))
+        surface.blit(turn_text, (self.x, self.y + 105))
+        
+        # Opponent info (if available)
+        if opponent_state:
+            opponent_text = self.font.render(f"Opponent", True, (255, 100, 100))
+            surface.blit(opponent_text, (self.x, self.y + 140))
+            
+            opp_health_text = self.small_font.render(f"Health: {opponent_state['health']}", True, (255, 50, 50))
+            surface.blit(opp_health_text, (self.x, self.y + 170))
+
+# ============================================================================
+# MAIN GAME CLIENT
+# ============================================================================
+
+class HearthstoneBattlegroundsClient:
+    def __init__(self):
+        self.screen = screen
+        self.running = True
+        
+        # Game state
+        self.game_state = GameState()
+        self.network = NetworkManager()
+        
+        # UI Components
+        self.minion_manager = MinionManager(screen)
+        
+        # Buttons
+        self.buttons = {
+            "END_TURN": Button((660, 300, 100, 50), "END TURN", (255, 100, 100), (230, 70, 70)),
+            "UPGRADE": Button((230, 110, 80, 70), "UPGRADE", (50, 150, 50), (30, 130, 30)),
+            "FREEZE": Button((450, 80, 80, 50), "FREEZE", (100, 100, 255), (70, 70, 230)),
+            "REFRESH": Button((450, 140, 100, 50), "REFRESH", (255, 200, 50), (230, 180, 30)),
+            "SELL": Button((660, 370, 80, 40), "SELL", (200, 50, 50), (180, 30, 30)),
+            "HERO_POWER": Button((570, 110, 100, 50), "HERO POWER", (150, 50, 150), (130, 30, 130))
+        }
+        
+        # Displays
+        self.gold_display = GoldDisplay(30, 50)
+        self.timer_display = TimerDisplay(250, 20)
+        self.player_info = PlayerInfoPanel(650, 20)
+        
+        # Placeholders (from original code)
+        self.placeholders = {
+            "hero": {"rect": pygame.Rect(330, 465, 90, 120), "color": (50, 50, 100, 180), "label": "Hero"},
+            "opponent_hero": {"rect": pygame.Rect(330, 70, 90, 120), "color": (100, 50, 50, 180), "label": "Opponent"},
+            "players": {"rect": pygame.Rect(30, 250, 50, 200), "color": (100, 50, 50, 180), "label": "players"},
+        }
+        
+        # Game phase specific
+        self.combat_log = []
+        self.combat_events = []
+        self.current_combat_step = 0
+        
+        # Popup states
+        self.discover_popup = None
+        self.choose_one_popup = None
+        self.error_popup = None
+        
+        # Start network
+        self.network.start()
+        
+    def handle_network_messages(self):
+        """Process incoming network messages"""
+        while self.network.has_messages():
+            message = self.network.get_message()
+            if message:
+                self.process_server_message(message)
+                
+    def process_server_message(self, message):
+        """Process a message from server"""
+        msg_type = message.get("type")
+        
+        print(f"Received message type: {msg_type}")
+        
+        if msg_type == "state_delta":
+            self.handle_state_delta(message)
+        elif msg_type == "combat_start":
+            self.handle_combat_start(message)
+        elif msg_type == "combat_event":
+            self.handle_combat_event(message)
+        elif msg_type == "combat_result":
+            self.handle_combat_result(message)
+        elif msg_type == "discover_offer":
+            self.handle_discover_offer(message)
+        elif msg_type == "choose_one_offer":
+            self.handle_choose_one_offer(message)
+        elif msg_type == "leaderboard_update":
+            self.handle_leaderboard_update(message)
+        elif msg_type == "error":
+            self.handle_error(message)
+        elif msg_type == "session_closed":
+            self.handle_session_closed(message)
+        elif msg_type == "full_game_state":
+            self.handle_full_game_state(message)
+        elif msg_type == "lobby_update":
+            self.handle_lobby_update(message)
+        elif msg_type == "hero_selection":
+            self.handle_hero_selection(message)
+        elif msg_type == "phase_change":
+            self.handle_phase_change(message)
+            
+    def handle_state_delta(self, message):
+        """Handle state updates from server"""
+        events = message.get("events", [])
+        
+        for event in events:
+            op = event.get("op")
+            player_id = event.get("player_id")
+            
+            if player_id != self.game_state.current_player_id:
+                continue  # Only process events for local player
+                
+            if op == "gold":
+                self.game_state.gold = event.get("value", self.game_state.gold)
+            elif op == "shop_update":
+                self.update_shop(event.get("slots", []))
+            elif op == "hand_add":
+                self.add_to_hand(event.get("card"))
+            elif op == "hand_remove":
+                self.remove_from_hand(event.get("hand_index"))
+            elif op == "board_insert":
+                self.add_to_board(event.get("slot"), event.get("minion_data"))
+            elif op == "board_update":
+                self.update_board_minion(event.get("slot"), event.get("minion_data"))
+            elif op == "board_remove":
+                self.remove_from_board(event.get("slot"))
+            elif op == "freeze_state":
+                self.game_state.shop_frozen = event.get("frozen", False)
+            elif op == "hero_health":
+                self.game_state.health = event.get("value", self.game_state.health)
+            elif op == "armor":
+                self.game_state.armor = event.get("value", self.game_state.armor)
+            elif op == "tavern_tier":
+                self.game_state.tavern_tier = event.get("value", self.game_state.tavern_tier)
+            elif op == "upgrade_cost":
+                self.game_state.upgrade_cost = event.get("value", self.game_state.upgrade_cost)
+            elif op == "discount":
+                self.game_state.tavern_upgrade_discount = event.get("value", 0)
+            elif op == "log":
+                self.add_to_log(event.get("level", "info"), event.get("message", ""))
+            elif op == "timer_tick":
+                self.game_state.timer_ms = event.get("value", self.game_state.timer_ms)
+                
+    def handle_combat_start(self, message):
+        """Handle combat start"""
+        self.game_state.phase = "COMBAT"
+        self.combat_log = []
+        self.combat_events = message.get("boards", {})
+        self.current_combat_step = 0
+        
+        # Extract boards for visualization
+        player_board = self.combat_events.get(self.game_state.current_player_id, [])
+        opponent_id = next((pid for pid in self.combat_events if pid != self.game_state.current_player_id), None)
+        opponent_board = self.combat_events.get(opponent_id, []) if opponent_id else []
+        
+        print(f"Combat started! Player board: {len(player_board)}, Opponent board: {len(opponent_board)}")
+        
+    def handle_combat_event(self, message):
+        """Handle combat events for animation"""
+        self.combat_log.append(message)
+        
+    def handle_combat_result(self, message):
+        """Handle combat result"""
+        self.game_state.combat_result = message
+        damage = message.get("damage", {})
+        
+        if self.game_state.current_player_id in damage:
+            damage_taken = damage[self.game_state.current_player_id]
+            self.game_state.health -= damage_taken
+            
+        # Transition back to recruit phase after showing results
+        # In full implementation, this would trigger a timer
+        self.game_state.phase = "RECRUIT"
+        
+    def handle_discover_offer(self, message):
+        """Show discover popup"""
+        self.discover_popup = {
+            "request_id": message.get("request_id"),
+            "options": message.get("options", []),
+            "source": message.get("source")
+        }
+        
+    def handle_choose_one_offer(self, message):
+        """Show choose one popup"""
+        self.choose_one_popup = {
+            "request_id": message.get("request_id"),
+            "options": message.get("options", []),
+            "minion_id": message.get("minion_id")
+        }
+        
+    def handle_error(self, message):
+        """Show error popup"""
+        self.error_popup = {
+            "code": message.get("code", "UNKNOWN_ERROR"),
+            "message": message.get("message", "An error occurred"),
+            "retryable": message.get("retryable", False)
+        }
+        
+        print(f"Error from server: {self.error_popup['code']} - {self.error_popup['message']}")
+        
+    def handle_full_game_state(self, message):
+        """Handle full game state sync"""
+        self.game_state.update_from_server(message)
+        self.game_state.current_player_id = message.get("player_id")
+        
+    def handle_phase_change(self, message):
+        """Handle phase changes"""
+        new_phase = message.get("phase")
+        self.game_state.phase = new_phase
+        
+        if new_phase == "RECRUIT":
+            # Reset ready flag
+            self.game_state.ready = False
+            
+    # ========================================================================
+    # GAME ACTIONS - Send to Server
+    # ========================================================================
     
-    def _create_buttons(self) -> List[Button]:
-        buttons = []
-        x_start = SCREEN_WIDTH - 150
-        y_start = 100
-        btn_width = 140
-        btn_height = 40
-        spacing = 50
+    def send_action(self, action_type, payload=None):
+        """Send action to server"""
+        if not self.network.is_connected():
+            print("Cannot send action: Not connected")
+            return
+            
+        message = {
+            "action": action_type,
+            "token": self.network.token,
+            "timestamp": int(pygame.time.get_ticks() / 1000)
+        }
         
-        button_data = [
-            ("Refresh (1g)", "refresh"),
-            ("Freeze", "freeze"),
-            ("End Turn", "end_turn"),
-            ("Upgrade (5g)", "upgrade"),
-            ("Hero Power", "hero_power"),
+        if payload:
+            message["payload"] = payload
+            
+        self.network.send(message)
+        
+    def buy_minion(self, shop_slot):
+        """Buy minion from shop"""
+        self.send_action("BUY", {
+            "shop_slot": shop_slot
+        })
+        
+    def sell_minion(self, board_slot):
+        """Sell minion from board"""
+        self.send_action("SELL", {
+            "board_slot": board_slot
+        })
+        
+    def play_minion(self, hand_index, board_slot):
+        """Play minion from hand to board"""
+        self.send_action("PLAY", {
+            "hand_index": hand_index,
+            "board_slot": board_slot
+        })
+        
+    def refresh_shop(self):
+        """Refresh shop"""
+        self.send_action("REFRESH")
+        
+    def freeze_shop(self):
+        """Toggle shop freeze"""
+        self.send_action("FREEZE")
+        
+    def upgrade_tavern(self):
+        """Upgrade tavern tier"""
+        self.send_action("UPGRADE")
+        
+    def use_hero_power(self, target_slot=None):
+        """Use hero power"""
+        payload = {}
+        if target_slot is not None:
+            payload["target_slot"] = target_slot
+        self.send_action("HERO_POWER", payload)
+        
+    def end_turn(self):
+        """End current turn"""
+        self.send_action("END_TURN")
+        
+    def discover_choice(self, request_id, card_id):
+        """Send discover choice"""
+        self.send_action("DISCOVER_CHOICE", {
+            "request_id": request_id,
+            "card_id": card_id
+        })
+        
+    def choose_one_choice(self, request_id, option):
+        """Send choose one choice"""
+        self.send_action("CHOOSE_ONE", {
+            "request_id": request_id,
+            "option": option
+        })
+        
+    def ready_up(self):
+        """Mark player as ready"""
+        self.send_action("READY")
+        
+    # ========================================================================
+    # UI HELPER METHODS
+    # ========================================================================
+    
+    def update_shop(self, shop_slots):
+        """Update shop from server data"""
+        self.game_state.shop = []
+        
+        for slot_data in shop_slots:
+            if slot_data is None:
+                self.game_state.shop.append(None)
+            else:
+                # Create minion object from data
+                minion_data = {
+                    "card_id": slot_data.get("card_id"),
+                    "instance_id": slot_data.get("instance_id", f"shop_{uuid.uuid4().hex[:8]}"),
+                    "attack": slot_data.get("attack", 1),
+                    "health": slot_data.get("health", 1),
+                    "keywords": slot_data.get("keywords", []),
+                    "tier": slot_data.get("tier", 1),
+                    "name": slot_data.get("name", "Unknown"),
+                    "cost": slot_data.get("cost", 3)
+                }
+                self.game_state.shop.append(minion_data)
+                
+    def add_to_hand(self, card_data):
+        """Add minion to hand"""
+        if len(self.game_state.hand) < 10:
+            self.game_state.hand.append(card_data)
+            
+    def add_to_board(self, slot, minion_data):
+        """Add minion to board"""
+        if len(self.game_state.board) < 7 and 0 <= slot < 7:
+            # Make sure slot is not occupied
+            occupied = any(m.get("board_slot") == slot for m in self.game_state.board)
+            if not occupied:
+                minion_data["board_slot"] = slot
+                self.game_state.board.append(minion_data)
+                
+    def update_board_minion(self, slot, minion_data):
+        """Update board minion stats"""
+        for i, minion in enumerate(self.game_state.board):
+            if minion.get("board_slot") == slot:
+                self.game_state.board[i].update(minion_data)
+                break
+                
+    def add_to_log(self, level, message):
+        """Add message to game log"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_entry = f"[{timestamp}] {level.upper()}: {message}"
+        print(log_entry)
+        
+    def draw_placeholder(self, ph_data):
+        """Draw placeholder from original code"""
+        ph_surface = pygame.Surface((ph_data["rect"].width, ph_data["rect"].height), pygame.SRCALPHA)
+        pygame.draw.rect(ph_surface, ph_data["color"], 
+                        (0, 0, ph_data["rect"].width, ph_data["rect"].height), 
+                        border_radius=5)
+        pygame.draw.rect(ph_surface, (255, 255, 255), 
+                        (0, 0, ph_data["rect"].width, ph_data["rect"].height), 
+                        2, border_radius=5)
+        
+        self.screen.blit(ph_surface, ph_data["rect"])
+        
+        font = pygame.font.Font(None, 20)
+        label = font.render(ph_data["label"], True, (255, 255, 255))
+        label_rect = label.get_rect(center=ph_data["rect"].center)
+        self.screen.blit(label, label_rect)
+        
+    def draw_shop(self):
+        """Draw shop minions"""
+        shop_positions = [(130, 200), (230, 200), (330, 200), (430, 200), (530, 200)]
+        
+        for i, slot_data in enumerate(self.game_state.shop):
+            if i < len(shop_positions) and slot_data is not None:
+                x, y = shop_positions[i]
+                
+                # Draw slot background
+                slot_rect = pygame.Rect(x, y, 70, 100)
+                pygame.draw.rect(self.screen, (40, 40, 60, 150), slot_rect)
+                pygame.draw.rect(self.screen, (100, 100, 150), slot_rect, 2)
+                
+                # Try to load and draw minion image
+                try:
+                    card_id = slot_data.get("card_id", "unknown")
+                    image = pygame.image.load(f"./bgknowhow-main/images/minions/{card_id}_render_80.webp")
+                    image = pygame.transform.scale(image, (100, 140))
+                    img_rect = image.get_rect(center=(x + 35, y + 50))
+                    self.screen.blit(image, img_rect)
+                except:
+                    # Fallback rectangle
+                    pygame.draw.rect(self.screen, (100, 100, 150), 
+                                    pygame.Rect(x + 10, y + 10, 50, 80))
+                    
+                # Draw cost
+                font = pygame.font.Font(None, 20)
+                cost_text = font.render(f"{slot_data.get('cost', 3)}G", True, (255, 215, 0))
+                cost_rect = cost_text.get_rect(center=(x + 35, y - 10))
+                self.screen.blit(cost_text, cost_rect)
+                
+                # Draw frozen indicator
+                if self.game_state.shop_frozen:
+                    freeze_font = pygame.font.Font(None, 24)
+                    freeze_text = freeze_font.render("FROZEN", True, (100, 200, 255))
+                    self.screen.blit(freeze_text, (350, 280))
+                    
+    def draw_board(self):
+        """Draw board minions"""
+        board_positions = [
+            (105, 340), (185, 340), (265, 340), (345, 340),
+            (425, 340), (505, 340), (585, 340)
         ]
         
-        for i, (text, action) in enumerate(button_data):
-            buttons.append(Button(
-                x_start, y_start + i * spacing,
-                btn_width, btn_height,
-                text, action
-            ))
-        
-        return buttons
-    
-    def _add_log(self, message: str, is_error: bool = False):
-        color = "error" if is_error else "success"
-        self.log.append(message)
-        if len(self.log) > 8:
-            self.log.pop(0)
-        print(f"[LOG] {message}")
-    
-    async def _send_to_server(self, action_type, payload=None):
-        if self.ws_manager.connected:
-            await self.ws_manager.send_action(action_type, payload)
-        else:
-            self._add_log("Not connected to server", True)
-    
-    def _run_async_in_thread(self, coro):
-        if hasattr(self.ws_manager, 'loop') and self.ws_manager.loop:
-            asyncio.run_coroutine_threadsafe(coro, self.ws_manager.loop)
-        else:
-            print("Warning: No event loop available")
-    
-    def handle_events(self):
-        mouse_pos = pygame.mouse.get_pos()
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
-            
-            elif event.type == pygame.KEYDOWN:
-                # فقط در لحظه فشرده شدن کلید
-                self._handle_keyboard(event)
-            
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
-                    mouse_handled = False
-                    
-                    # ابتدا کارت‌های shop را بررسی کن
-                    if self.current_player:
-                        for card in self.current_player.shop:
-                            if card and card.contains_point(mouse_pos):
-                                self.dragging_card = card
-                                self.drag_source = "shop"
-                                card.start_drag(mouse_pos)
-                                mouse_handled = True
-                                break
-                        
-                        # اگر روی shop نبود، board را بررسی کن
-                        if not mouse_handled:
-                            for card in self.current_player.board:
-                                if card and card.contains_point(mouse_pos):
-                                    self.dragging_card = card
-                                    self.drag_source = "board"
-                                    card.start_drag(mouse_pos)
-                                    mouse_handled = True
-                                    break
-                    
-                    # اگر روی کارتی نبود، دکمه‌ها را بررسی کن
-                    if not mouse_handled:
-                        for button in self.buttons:
-                            if button.rect.collidepoint(mouse_pos) and button.enabled:
-                                print(f"Button clicked: {button.action}")  # برای دیباگ
-                                self._handle_button_click(button.action)
-                                break
+        for minion_data in self.game_state.board:
+            slot = minion_data.get("board_slot", 0)
+            if 0 <= slot < len(board_positions):
+                x, y = board_positions[slot]
                 
-                elif event.button == 3:  # Right click
-                    self._handle_right_click(mouse_pos)
-            
-            elif event.type == pygame.MOUSEBUTTONUP:
-                if event.button == 1 and self.dragging_card:
-                    self._handle_card_drop(mouse_pos)
-
-        # فقط برای hover کردن دکمه‌ها (نه برای کلیک)
-        for button in self.buttons:
-            button.check_hover(mouse_pos)
-
-        # Update dragging
-        if self.dragging_card:
-            self.dragging_card.update_drag(mouse_pos)    
-    def _handle_keyboard(self, event):
-        if event.key == pygame.K_ESCAPE:
-            self.running = False
-        elif event.key == pygame.K_r:
-            self._handle_refresh()
-        elif event.key == pygame.K_f:
-            self._handle_freeze()
-        elif event.key == pygame.K_SPACE:
-            self._handle_end_turn()
-    
-    def _handle_left_click(self, mouse_pos: Tuple[int, int]):
-        if not self.current_player:
-            return
-            
-        for card in self.current_player.shop:
-            if card and card.contains_point(mouse_pos):
-                self.dragging_card = card
-                self.drag_source = "shop"
-                card.start_drag(mouse_pos)
-                return
+                # Draw minion using minion_manager or custom drawing
+                try:
+                    # Try to create minion object
+                    minion = create_minion(
+                        self.screen, x, y,
+                        minion_data.get("card_id", "unknown"),
+                        minion_data.get("golden", False)
+                    )
+                    
+                    # Update stats
+                    minion.current_attack = minion_data.get("attack", minion.base_attack)
+                    minion.current_health = minion_data.get("health", minion.base_health)
+                    minion.keywords = minion_data.get("keywords", [])
+                    
+                    minion.draw()
+                except Exception as e:
+                    print(f"Error drawing minion: {e}")
+                    # Draw fallback
+                    pygame.draw.rect(self.screen, (150, 150, 200), 
+                                    pygame.Rect(x, y, 70, 100))
+                    
+    def draw_hand(self):
+        """Draw hand minions"""
+        hand_positions = [
+            (180, 580), (270, 580), (360, 580), (450, 580), (540, 580),
+        ]
         
-        for card in self.current_player.board:
-            if card and card.contains_point(mouse_pos):
-                self.dragging_card = card
-                self.drag_source = "board"
-                card.start_drag(mouse_pos)
-                return
-    
-    def _handle_right_click(self, mouse_pos: Tuple[int, int]):
-        if not self.current_player:
-            return
-            
-        for i, card in enumerate(self.current_player.board):
-            if card and card.contains_point(mouse_pos):
-                if self.offline_mode:
-                    self.current_player.gold += 1
-                    self.current_player.board[i] = None
-                    self._add_log(f"Sold {card.name} (+1 gold)")
-                else:
-                    payload = {
-                        "instance_id": card.instance_id,
-                        "slot": i
-                    }
-                    self._run_async_in_thread(self._send_to_server("SELL_MINION", payload))
-                return
-    
-    def _handle_card_drop(self, mouse_pos: Tuple[int, int]):
-        if not self.dragging_card or not self.current_player:
-            return
+        for i, minion_data in enumerate(self.game_state.hand):
+            if i < len(hand_positions):
+                x, y = hand_positions[i]
+                
+                try:
+                    minion = create_minion(
+                        self.screen, x, y,
+                        minion_data.get("card_id", "unknown"),
+                        minion_data.get("golden", False)
+                    )
+                    
+                    minion.current_attack = minion_data.get("attack", minion.base_attack)
+                    minion.current_health = minion_data.get("health", minion.base_health)
+                    minion.keywords = minion_data.get("keywords", [])
+                    
+                    minion.draw()
+                except Exception as e:
+                    print(f"Error drawing hand minion: {e}")
+                    pygame.draw.rect(self.screen, (200, 150, 150), 
+                                    pygame.Rect(x, y, 70, 100))
+                    
+    def update_button_states(self):
+        """Update button enabled states based on game state"""
+        # End Turn button - always enabled in recruit phase
+        self.buttons["END_TURN"].enabled = (self.game_state.phase == "RECRUIT")
         
-        board_rect = pygame.Rect(
-            self.current_player.board_pos[0] - 10,
-            self.current_player.board_pos[1] - 10,
-            BOARD_SLOTS * (CARD_WIDTH + 5) + 20,
-            CARD_HEIGHT + 20
+        # Upgrade button
+        self.buttons["UPGRADE"].enabled = self.game_state.can_upgrade_tavern()
+        
+        # Freeze button - always enabled
+        self.buttons["FREEZE"].enabled = True
+        
+        # Refresh button
+        self.buttons["REFRESH"].enabled = self.game_state.can_refresh_shop()
+        
+        # Sell button - only enabled if minion selected
+        self.buttons["SELL"].enabled = (self.game_state.selected_minion is not None)
+        
+        # Hero Power button - depends on hero and gold
+        hero_power_cost = 1  # Default cost, should come from game state
+        self.buttons["HERO_POWER"].enabled = (
+            self.game_state.phase == "RECRUIT" and
+            not self.game_state.hero_power_used and
+            self.game_state.gold >= hero_power_cost
         )
         
-        if self.drag_source == "shop" and board_rect.collidepoint(mouse_pos):
-            self._buy_card()
-        elif self.drag_source == "board" and not board_rect.collidepoint(mouse_pos):
-            self._sell_card()
+    def draw_phase_indicator(self):
+        """Draw current phase indicator"""
+        phase_colors = {
+            "LOBBY": (100, 100, 255),
+            "HERO_SELECT": (150, 100, 255),
+            "RECRUIT": (100, 255, 100),
+            "COMBAT": (255, 100, 100),
+            "GAME_OVER": (100, 100, 100)
+        }
         
-        if self.dragging_card:
-            self.dragging_card.stop_drag()
-            self.dragging_card = None
-            self.drag_source = ""
-    
-    def _buy_card(self):
-        if not self.dragging_card or not self.current_player:
-            return
-            
-        if self.offline_mode:
-            if self.current_player.gold < self.dragging_card.cost:
-                self._add_log("Not enough gold!", True)
-                return
-            
-            empty_slot = self.current_player._find_empty_board_slot()
-            if empty_slot == -1:
-                self._add_log("Board is full!", True)
-                return
-            
-            for i, card in enumerate(self.current_player.shop):
-                if card and card.instance_id == self.dragging_card.instance_id:
-                    self.current_player.shop[i] = None
-                    break
-            
-            if empty_slot < len(self.current_player.board):
-                self.current_player.board[empty_slot] = self.dragging_card
-            else:
-                self.current_player.board.append(self.dragging_card)
-            
-            self.current_player.gold -= self.dragging_card.cost
-            self._add_log(f"Bought {self.dragging_card.name} (-{self.dragging_card.cost}g)")
-        else:
-            shop_slot = self._find_card_slot(self.dragging_card, "shop")
-            if shop_slot >= 0:
-                payload = {
-                    "shop_slot": shop_slot,
-                    "card_id": self.dragging_card.card_id,
-                    "expected_cost": self.dragging_card.cost
-                }
-                self._run_async_in_thread(self._send_to_server("BUY_MINION", payload))
-    
-    def _sell_card(self):
-        if not self.dragging_card or not self.current_player:
-            return
-            
-        if self.offline_mode:
-            for i, card in enumerate(self.current_player.board):
-                if card and card.instance_id == self.dragging_card.instance_id:
-                    self.current_player.board[i] = None
-                    self.current_player.gold += 1
-                    self._add_log(f"Sold {card.name} (+1 gold)")
-                    return
-        else:
-            board_slot = self._find_card_slot(self.dragging_card, "board")
-            if board_slot >= 0:
-                payload = {
-                    "instance_id": self.dragging_card.instance_id,
-                    "slot": board_slot
-                }
-                self._run_async_in_thread(self._send_to_server("SELL_MINION", payload))
-    
-    def _handle_button_click(self, action: str):
-        """Handle button clicks - فقط یک بار اجرا می‌شود"""
-        print(f"Processing button action: {action}")
+        color = phase_colors.get(self.game_state.phase, (255, 255, 255))
         
-        if action == "refresh":
-            self._handle_refresh()
-        elif action == "freeze":
-            self._handle_freeze()
-        elif action == "end_turn":
-            self._handle_end_turn()
-        elif action == "upgrade":
-            self._handle_upgrade()
-        elif action == "hero_power":
-            self._handle_hero_power()    
-    def _handle_refresh(self):
-        if self.offline_mode:
-            if self.current_player.gold >= 1:
-                self.current_player.gold -= 1
-                self._add_log("Shop refreshed (-1 gold)")
-            else:
-                self._add_log("Not enough gold to refresh!", True)
-        else:
-            self._run_async_in_thread(self._send_to_server("REFRESH_SHOP"))
-    
-    def _handle_freeze(self):
-        if self.offline_mode:
-            self.current_player.shop_frozen = not self.current_player.shop_frozen
-            status = "frozen" if self.current_player.shop_frozen else "unfrozen"
-            self._add_log(f"Shop {status}")
-        else:
-            self._run_async_in_thread(self._send_to_server("TOGGLE_FREEZE"))
-    
-    def _handle_end_turn(self):
-        if self.offline_mode:
-            self.timer.time_left = 0
-            self._add_log("Turn ended")
-        else:
-            self._run_async_in_thread(self._send_to_server("END_TURN"))
-    
-    def _handle_upgrade(self):
-        cost = 5
-        if self.offline_mode:
-            if self.current_player.gold >= cost:
-                self.current_player.gold -= cost
-                self.current_player.tavern_tier += 1
-                self._add_log(f"Tavern upgraded to tier {self.current_player.tavern_tier} (-{cost}g)")
-            else:
-                self._add_log("Not enough gold to upgrade!", True)
-        else:
-            payload = {
-                "current_tier": self.current_player.tavern_tier,
-                "expected_cost": cost
-            }
-            self._run_async_in_thread(self._send_to_server("UPGRADE_TAVERN", payload))
-    
-    def _handle_hero_power(self):
-        if self.offline_mode:
-            if not self.current_player.hero_power_used:
-                self.current_player.hero_power_used = True
-                self._add_log(f"{self.current_player.hero_name} hero power used")
-            else:
-                self._add_log("Hero power already used this turn", True)
-        else:
-            self._run_async_in_thread(self._send_to_server("USE_HERO_POWER"))
-    
-    def update(self, dt: float):
-        self.timer.update(dt)
+        # Draw phase bar at top
+        phase_bar = pygame.Rect(0, 0, 800, 5)
+        pygame.draw.rect(self.screen, color, phase_bar)
         
-        if not self.timer.active and self.phase == "RECRUIT":
-            self.phase = "COMBAT"
-            self._add_log("Entering combat phase!")
-    
+        # Draw phase text
+        font = pygame.font.Font(None, 32)
+        phase_text = font.render(f"Phase: {self.game_state.phase}", True, color)
+        self.screen.blit(phase_text, (300, 10))
+        
     def draw(self):
-        self.screen.fill(COLORS["bg"])
+        """Draw everything"""
+        # Draw background
+        self.screen.blit(game_bg, (0, 0))
         
-        title = FONT_TITLE.render("MAW BATTLEGROUNDS", True, COLORS["gold"])
-        self.screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, 10))
+        # Draw phase indicator
+        self.draw_phase_indicator()
         
-        status = "Connected" if self.ws_manager.connected else "Offline"
-        status_color = (100, 220, 100) if self.ws_manager.connected else (255, 100, 100)
-        status_text = FONT_SMALL.render(status, True, status_color)
-        self.screen.blit(status_text, (SCREEN_WIDTH - 150, 10))
-        
-        self._draw_player_info()
-        
-        self._draw_shop()
-        self._draw_board()
-        
-        self.timer.draw(self.screen)
-        for button in self.buttons:
-            button.draw(self.screen)
-        
-        self._draw_log()
-        
-        if self.dragging_card:
-            self.dragging_card.draw(self.screen, 
-                                   self.dragging_card.x, 
-                                   self.dragging_card.y,
-                                   show_cost=(self.drag_source == "shop"))
-        
-        phase_text = FONT_NORMAL.render(f"Phase: {self.phase}", True, COLORS["text"])
-        self.screen.blit(phase_text, (20, SCREEN_HEIGHT - 30))
-    
-    def _draw_player_info(self):
-        if not self.current_player:
-            return
-        
-        hero_text = FONT_NORMAL.render(self.current_player.hero_name, True, (255, 255, 200))
-        self.screen.blit(hero_text, (20, 20))
-        
-        stats = f"Health: {self.current_player.health}   Gold: {self.current_player.gold}   Tier: {self.current_player.tavern_tier}"
-        stats_text = FONT_NORMAL.render(stats, True, COLORS["text"])
-        self.screen.blit(stats_text, (20, 50))
-        
-        if self.current_player.shop_frozen:
-            freeze_text = FONT_SMALL.render("FROZEN", True, COLORS["shop"])
-            self.screen.blit(freeze_text, (200, 50))
-    
-    def _draw_shop(self):
-        if not self.current_player:
-            return
+        # Draw placeholders
+        for ph_key in self.placeholders:
+            self.draw_placeholder(self.placeholders[ph_key])
             
-        title = FONT_NORMAL.render("SHOP", True, COLORS["shop"])
-        self.screen.blit(title, (self.current_player.shop_pos[0], 
-                                self.current_player.shop_pos[1] - 25))
+        # Draw game elements based on phase
+        if self.game_state.phase == "RECRUIT":
+            self.draw_shop()
+            self.draw_board()
+            self.draw_hand()
+            
+            # Update and draw buttons
+            mouse_pos = pygame.mouse.get_pos()
+            self.update_button_states()
+            for button in self.buttons.values():
+                button.draw(self.screen, mouse_pos)
+                
+            # Draw displays
+            self.gold_display.draw(self.screen, self.game_state.gold, self.game_state.max_gold)
+            self.timer_display.draw(self.screen, self.game_state.timer_ms)
+            
+            # Draw player info
+            player_info = {
+                "health": self.game_state.health,
+                "armor": self.game_state.armor,
+                "tavern_tier": self.game_state.tavern_tier,
+                "turn": self.game_state.turn
+            }
+            self.player_info.draw(self.screen, player_info)
+            
+        elif self.game_state.phase == "COMBAT":
+            # Draw combat view
+            self.draw_combat_view()
+            
+        elif self.game_state.phase == "LOBBY":
+            self.draw_lobby_view()
+            
+        elif self.game_state.phase == "HERO_SELECT":
+            self.draw_hero_selection()
+            
+        # Draw popups if any
+        if self.discover_popup:
+            self.draw_discover_popup()
+        if self.choose_one_popup:
+            self.draw_choose_one_popup()
+        if self.error_popup:
+            self.draw_error_popup()
+            
+        # Draw help text
+        help_font = pygame.font.Font(None, 18)
+        help_text = help_font.render("Click minions to buy, drag to board, right-click to sell", 
+                                    True, (200, 200, 255))
+        self.screen.blit(help_text, (200, 680))
         
-        for i, card in enumerate(self.current_player.shop):
-            x = self.current_player.shop_pos[0] + i * (CARD_WIDTH + 10)
-            y = self.current_player.shop_pos[1]
-            
-            if card and card != self.dragging_card:
-                card.draw(self.screen, x, y, show_cost=True)
-            elif card is None:
-                slot = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
-                pygame.draw.rect(self.screen, (30, 40, 60), slot, border_radius=6)
-                pygame.draw.rect(self.screen, (60, 80, 100), slot, 1, border_radius=6)
-    
-    def _draw_board(self):
-        if not self.current_player:
-            return
-            
-        title = FONT_NORMAL.render("BOARD", True, COLORS["board"])
-        self.screen.blit(title, (self.current_player.board_pos[0],
-                                self.current_player.board_pos[1] - 25))
+    def draw_combat_view(self):
+        """Draw combat animation"""
+        # This would be expanded to show combat animations
+        font = pygame.font.Font(None, 48)
+        combat_text = font.render("COMBAT IN PROGRESS", True, (255, 50, 50))
+        text_rect = combat_text.get_rect(center=(400, 350))
+        self.screen.blit(combat_text, text_rect)
         
-        board_bg = pygame.Rect(
-            self.current_player.board_pos[0] - 5,
-            self.current_player.board_pos[1] - 5,
-            BOARD_SLOTS * (CARD_WIDTH + 5) + 10,
-            CARD_HEIGHT + 10
-        )
-        pygame.draw.rect(self.screen, (35, 45, 65), board_bg, border_radius=8)
-        pygame.draw.rect(self.screen, (70, 100, 140), board_bg, 1, border_radius=8)
+        if self.game_state.combat_result:
+            result_font = pygame.font.Font(None, 36)
+            damage = self.game_state.combat_result.get("damage", {})
+            if self.game_state.current_player_id in damage:
+                result_text = result_font.render(
+                    f"You took {damage[self.game_state.current_player_id]} damage!", 
+                    True, (255, 100, 100)
+                )
+                result_rect = result_text.get_rect(center=(400, 420))
+                self.screen.blit(result_text, result_rect)
+                
+    def draw_lobby_view(self):
+        """Draw lobby screen"""
+        font = pygame.font.Font(None, 48)
+        lobby_text = font.render("WAITING FOR PLAYERS...", True, (100, 200, 255))
+        text_rect = lobby_text.get_rect(center=(400, 300))
+        self.screen.blit(lobby_text, text_rect)
         
-        for i in range(BOARD_SLOTS):
-            x = self.current_player.board_pos[0] + i * (CARD_WIDTH + 5)
-            y = self.current_player.board_pos[1]
-            
-            if i < len(self.current_player.board):
-                card = self.current_player.board[i]
-                if card and card != self.dragging_card:
-                    card.draw(self.screen, x, y)
-                elif card is None:
-                    pygame.draw.rect(self.screen, (50, 60, 80), 
-                                    (x, y, CARD_WIDTH, CARD_HEIGHT), 1, border_radius=6)
-    
-    def _draw_log(self):
-        log_bg = pygame.Rect(SCREEN_WIDTH - 300, SCREEN_HEIGHT - 180, 280, 160)
-        pygame.draw.rect(self.screen, (25, 35, 55), log_bg, border_radius=6)
-        pygame.draw.rect(self.screen, (60, 80, 110), log_bg, 1, border_radius=6)
+        small_font = pygame.font.Font(None, 24)
+        info_text = small_font.render("4 players needed to start", True, (200, 200, 255))
+        info_rect = info_text.get_rect(center=(400, 360))
+        self.screen.blit(info_text, info_rect)
         
-        log_title = FONT_SMALL.render("EVENT LOG", True, COLORS["text"])
-        self.screen.blit(log_title, (SCREEN_WIDTH - 290, SCREEN_HEIGHT - 170))
+    def draw_hero_selection(self):
+        """Draw hero selection screen"""
+        font = pygame.font.Font(None, 48)
+        title_text = font.render("SELECT YOUR HERO", True, (255, 215, 0))
+        title_rect = title_text.get_rect(center=(400, 100))
+        self.screen.blit(title_text, title_rect)
         
-        y_offset = SCREEN_HEIGHT - 145
-        for message in self.log[-6:]:
-            text = FONT_SMALL.render(message, True, (200, 220, 255))
-            self.screen.blit(text, (SCREEN_WIDTH - 290, y_offset))
-            y_offset += 22
-    
-    async def _update_from_server(self, message):
-        try:
-            players_data = message.get("players", [])
-            if players_data:
-                self.players = [Player(p) for p in players_data]
-                self.current_player = self.players[0]
+        # This would be expanded to show hero options
+        heroes = ["Sylvanas", "Lich King", "Millhouse", "Yogg-Saron"]
+        for i, hero in enumerate(heroes):
+            hero_font = pygame.font.Font(None, 36)
+            hero_text = hero_font.render(hero, True, (200, 200, 255))
+            hero_rect = hero_text.get_rect(center=(200 + i * 150, 300))
+            self.screen.blit(hero_text, hero_rect)
             
-            phase = message.get("phase", "RECRUIT")
-            self.phase = phase
-            
-            self._add_log(f"Game state updated from server (Phase: {phase})")
-            
-        except Exception as e:
-            print(f"Error updating from server: {e}")
-    
-    async def _update_shop(self, message):
-        if not self.current_player:
+    def draw_discover_popup(self):
+        """Draw discover popup"""
+        if not self.discover_popup:
             return
             
-        shop_data = message.get("shop", {})
-        gold = message.get("gold", self.current_player.gold)
+        # Draw semi-transparent overlay
+        overlay = pygame.Surface((800, 700), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200))
+        self.screen.blit(overlay, (0, 0))
         
-        self.current_player.gold = gold
-        self._add_log("Shop updated from server")
-    
-    async def _start_combat_replay(self, message):
-        combat_log = message.get("log", [])
-        seed = message.get("seed", 0)
+        # Draw popup box
+        popup_rect = pygame.Rect(200, 200, 400, 300)
+        pygame.draw.rect(self.screen, (50, 50, 80), popup_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (100, 100, 200), popup_rect, 3, border_radius=10)
         
-        self.phase = "COMBAT"
-        self._add_log(f"Starting combat replay (Seed: {seed})")
+        # Draw title
+        font = pygame.font.Font(None, 36)
+        title_text = font.render("DISCOVER A CARD", True, (255, 215, 0))
+        title_rect = title_text.get_rect(center=(400, 230))
+        self.screen.blit(title_text, title_rect)
         
-        for entry in combat_log:
-            p1 = entry.get("p1", "Player1")
-            p2 = entry.get("p2", "Player2")
-            damage = entry.get("damage", 0)
-            self._add_log(f"{p1} vs {p2}: {damage} damage")
-    
-    def _find_card_slot(self, card, location):
-        if not self.current_player:
-            return -1
+        # Draw options
+        options = self.discover_popup["options"]
+        for i, option in enumerate(options[:3]):  # Max 3 options
+            option_rect = pygame.Rect(250 + i * 100, 300, 80, 120)
+            pygame.draw.rect(self.screen, (100, 100, 150), option_rect)
+            pygame.draw.rect(self.screen, (200, 200, 255), option_rect, 2)
             
-        if location == "shop":
-            for i, c in enumerate(self.current_player.shop):
-                if c and c.instance_id == card.instance_id:
-                    return i
-        elif location == "board":
-            for i, c in enumerate(self.current_player.board):
-                if c and c.instance_id == card.instance_id:
-                    return i
-        return -1
-    
+            # Draw card name
+            small_font = pygame.font.Font(None, 16)
+            name_text = small_font.render(option.get("card_id", "Unknown"), True, (255, 255, 255))
+            name_rect = name_text.get_rect(center=option_rect.center)
+            self.screen.blit(name_text, name_rect)
+            
+    def draw_error_popup(self):
+        """Draw error popup"""
+        if not self.error_popup:
+            return
+            
+        # Draw error box
+        error_rect = pygame.Rect(250, 300, 300, 150)
+        pygame.draw.rect(self.screen, (80, 50, 50), error_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (200, 100, 100), error_rect, 3, border_radius=10)
+        
+        # Draw error text
+        font = pygame.font.Font(None, 24)
+        error_text = font.render(f"Error: {self.error_popup['code']}", True, (255, 150, 150))
+        error_rect_text = error_text.get_rect(center=(400, 330))
+        self.screen.blit(error_text, error_rect_text)
+        
+        message_font = pygame.font.Font(None, 20)
+        message_text = message_font.render(self.error_popup['message'], True, (255, 200, 200))
+        message_rect = message_text.get_rect(center=(400, 370))
+        self.screen.blit(message_text, message_rect)
+        
+    def get_minion_at_position(self, x, y):
+        """Get minion at mouse position"""
+        # Check shop
+        shop_positions = [(130, 200), (230, 200), (330, 200), (430, 200), (530, 200)]
+        for i, (sx, sy) in enumerate(shop_positions):
+            if i < len(self.game_state.shop) and self.game_state.shop[i] is not None:
+                shop_rect = pygame.Rect(sx, sy, 70, 100)
+                if shop_rect.collidepoint(x, y):
+                    return self.game_state.shop[i], "shop", i
+                    
+        # Check board
+        board_positions = [
+            (105, 340), (185, 340), (265, 340), (345, 340),
+            (425, 340), (505, 340), (585, 340)
+        ]
+        for minion in self.game_state.board:
+            slot = minion.get("board_slot", 0)
+            if 0 <= slot < len(board_positions):
+                bx, by = board_positions[slot]
+                board_rect = pygame.Rect(bx, by, 70, 100)
+                if board_rect.collidepoint(x, y):
+                    return minion, "board", slot
+                    
+        # Check hand
+        hand_positions = [
+            (180, 580), (270, 580), (360, 580), (450, 580), (540, 580),
+        ]
+        for i, minion in enumerate(self.game_state.hand):
+            if i < len(hand_positions):
+                hx, hy = hand_positions[i]
+                hand_rect = pygame.Rect(hx, hy, 70, 100)
+                if hand_rect.collidepoint(x, y):
+                    return minion, "hand", i
+                    
+        return None, None, None
+        
     def run(self):
-        print("=" * 50)
-        print("MAW BATTLEGROUNDS - Lightweight Frontend")
-        print("=" * 50)
-        print("Controls:")
-        print("• Drag SHOP cards to BOARD to buy")
-        print("• Drag BOARD cards away to sell")
-        print("• Right-click BOARD cards to quick sell")
-        print("• R: Refresh shop | F: Freeze shop")
-        print("• SPACE: End turn | ESC: Exit")
-        print("=" * 50)
-        
+        """Main game loop"""
         while self.running:
-            dt = self.clock.tick(30) / 1000.0
+            # Handle network messages
+            self.handle_network_messages()
             
-            self.handle_events()
-            self.update(dt)
+            # Update game state
+            self.game_state.update_timer()
+            
+            # Process events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    self.network.stop()
+                    
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    mouse_pos = pygame.mouse.get_pos()
+                    mouse_pressed = pygame.mouse.get_pressed()
+                    
+                    # Handle button clicks
+                    if self.buttons["END_TURN"].is_clicked(mouse_pos, mouse_pressed):
+                        self.end_turn()
+                    elif self.buttons["UPGRADE"].is_clicked(mouse_pos, mouse_pressed):
+                        self.upgrade_tavern()
+                    elif self.buttons["FREEZE"].is_clicked(mouse_pos, mouse_pressed):
+                        self.freeze_shop()
+                    elif self.buttons["REFRESH"].is_clicked(mouse_pos, mouse_pressed):
+                        self.refresh_shop()
+                    elif self.buttons["SELL"].is_clicked(mouse_pos, mouse_pressed):
+                        if self.game_state.selected_minion:
+                            # Find selected minion slot
+                            for i, minion in enumerate(self.game_state.board):
+                                if minion.get("instance_id") == self.game_state.selected_minion.get("instance_id"):
+                                    self.sell_minion(i)
+                                    break
+                    elif self.buttons["HERO_POWER"].is_clicked(mouse_pos, mouse_pressed):
+                        self.use_hero_power()
+                        
+                    # Handle minion clicks
+                    elif event.button == 1:  # Left click
+                        minion, location, index = self.get_minion_at_position(*mouse_pos)
+                        if minion:
+                            if location == "shop":
+                                self.buy_minion(index)
+                            elif location == "hand":
+                                self.game_state.selected_minion = minion
+                            elif location == "board":
+                                self.game_state.selected_minion = minion
+                                
+                    elif event.button == 3:  # Right click
+                        minion, location, index = self.get_minion_at_position(*mouse_pos)
+                        if minion and location == "board":
+                            self.sell_minion(index)
+                            
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    # Handle drag and drop
+                    if (self.game_state.selected_minion and 
+                        self.game_state.selected_minion.get("location") == "hand"):
+                        
+                        mouse_pos = pygame.mouse.get_pos()
+                        
+                        # Check if dropped on board slot
+                        board_positions = [
+                            (105, 340), (185, 340), (265, 340), (345, 340),
+                            (425, 340), (505, 340), (585, 340)
+                        ]
+                        
+                        target_slot = None
+                        for slot_index, (sx, sy) in enumerate(board_positions):
+                            slot_rect = pygame.Rect(sx, sy, 70, 100)
+                            if slot_rect.collidepoint(mouse_pos):
+                                # Check if slot is empty
+                                occupied = any(
+                                    m.get("board_slot") == slot_index 
+                                    for m in self.game_state.board
+                                )
+                                if not occupied:
+                                    target_slot = slot_index
+                                break
+                                
+                        if target_slot is not None:
+                            # Find hand index
+                            for i, minion in enumerate(self.game_state.hand):
+                                if minion.get("instance_id") == self.game_state.selected_minion.get("instance_id"):
+                                    self.play_minion(i, target_slot)
+                                    break
+                                    
+                        self.game_state.selected_minion = None
+                        
+                elif event.type == pygame.KEYDOWN:
+                    # Keyboard shortcuts
+                    if event.key == pygame.K_r:
+                        self.refresh_shop()
+                    elif event.key == pygame.K_u:
+                        self.upgrade_tavern()
+                    elif event.key == pygame.K_f:
+                        self.freeze_shop()
+                    elif event.key == pygame.K_SPACE:
+                        self.end_turn()
+                    elif event.key == pygame.K_ESCAPE:
+                        self.game_state.selected_minion = None
+                        
+            # Draw everything
             self.draw()
             
+            # Update display
             pygame.display.flip()
-        
-        self.ws_manager.disconnect()
+            clock.tick(60)
+            
         pygame.quit()
         sys.exit()
 
-# ==================== MAIN EXECUTION ====================
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
+
 if __name__ == "__main__":
-    if not os.path.exists('data'):
-        os.makedirs('data')
-        print("Created 'data' directory")
+    # Parse command line arguments
+    import argparse
     
-    try:
-        game = GameClient()
-        game.run()
-    except pygame.error as e:
-        print(f"PyGame Error: {e}")
-        print("Try running with software rendering:")
-        print("  Set environment variable: SDL_VIDEODRIVER=windib")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
-        input("Press Enter to exit...")
+    parser = argparse.ArgumentParser(description="Hearthstone Battlegrounds Client")
+    parser.add_argument("--server", default="ws://localhost:8888", help="WebSocket server URL")
+    parser.add_argument("--offline", action="store_true", help="Run in offline mode")
+    parser.add_argument("--token", help="Authentication token for reconnection")
+    
+    args = parser.parse_args()
+    
+    # Create and run client
+    client = HearthstoneBattlegroundsClient()
+    
+    if args.token:
+        client.network.set_token(args.token)
+        
+    if not args.offline:
+        client.network.server_url = args.server
+        
+    print("Starting Hearthstone Battlegrounds Client...")
+    print(f"Server: {args.server}")
+    print(f"Offline mode: {args.offline}")
+    
+    client.run()
