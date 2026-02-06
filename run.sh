@@ -1,266 +1,286 @@
 #!/bin/bash
 
-echo "🎮 MAW Game - Auto Launcher"
+echo "🎮 MAW Game - Fixed Launcher"
 echo "============================"
 
 # Configuration
 SERVER_CPP="server.cpp"
-SERVER_BINARY="maw_server"
+SERVER_BINARY="maw_server_fixed"
 CLIENT_PY="client.py"
 PORT=8888
-MAX_PLAYERS=4
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
 NC='\033[0m'
 
-# Function to print with color
 print_msg() {
     echo -e "${2}${1}${NC}"
 }
 
-# Function to check and install dependencies
-install_deps() {
-    print_msg "📦 Checking and installing dependencies..." "$BLUE"
+# Function to create a robust client
+create_robust_client() {
+    print_msg "📝 Creating robust client.py..." "$BLUE"
     
-    # Check for C++ compiler
-    if ! command -v g++ > /dev/null 2>&1; then
-        print_msg "Installing g++..." "$YELLOW"
-        sudo apt-get update
-        sudo apt-get install -y g++ 2>/dev/null
-    fi
-    
-    # Check for Boost
-    if [[ ! -f "/usr/include/boost/asio.hpp" ]] && [[ ! -f "/usr/local/include/boost/asio.hpp" ]]; then
-        print_msg "Installing Boost library..." "$YELLOW"
-        sudo apt-get install -y libboost-system-dev 2>/dev/null || true
-    fi
-    
-    # Check for Python3
-    if ! command -v python3 > /dev/null 2>&1; then
-        print_msg "Installing python3..." "$YELLOW"
-        sudo apt-get install -y python3 python3-pip 2>/dev/null
-    fi
-    
-    # Install Python websockets if needed
-    if ! python3 -c "import websockets" 2>/dev/null; then
-        print_msg "Installing websockets for Python..." "$YELLOW"
-        pip3 install websockets --user 2>/dev/null || true
-    fi
-    
-    print_msg "✅ Dependencies checked" "$GREEN"
-}
-
-# Function to compile the C++ server
-compile_server() {
-    print_msg "🔨 Compiling C++ server..." "$BLUE"
-    
-    # Check if server.cpp exists
-    if [[ ! -f "$SERVER_CPP" ]]; then
-        print_msg "❌ ERROR: $SERVER_CPP not found!" "$RED"
-        exit 1
-    fi
-    
-    # Try different compilation methods
-    if g++ -std=c++17 -pthread "$SERVER_CPP" -o "$SERVER_BINARY" -lboost_system 2>/dev/null; then
-        print_msg "✅ Server compiled successfully" "$GREEN"
-        return 0
-    fi
-    
-    # Try with different include paths
-    print_msg "Trying alternative compilation method..." "$YELLOW"
-    
-    # Create a simple test to check Boost
-    cat > /tmp/test_boost.cpp << 'EOF'
-#include <iostream>
-#include <boost/version.hpp>
-int main() {
-    std::cout << "Boost version: " << BOOST_VERSION << std::endl;
-    return 0;
-}
-EOF
-    
-    if g++ -std=c++17 /tmp/test_boost.cpp -o /tmp/test_boost -lboost_system 2>/dev/null; then
-        print_msg "Boost is working, trying server again..." "$GREEN"
-        
-        # Final attempt with all possible flags
-        g++ -std=c++17 -pthread "$SERVER_CPP" -o "$SERVER_BINARY" -lboost_system -I/usr/include -I/usr/local/include 2>/tmp/compile.log
-        
-        if [[ -f "$SERVER_BINARY" ]]; then
-            print_msg "✅ Server compiled (with possible warnings)" "$GREEN"
-            return 0
-        else
-            print_msg "❌ Compilation failed. Check /tmp/compile.log" "$RED"
-            return 1
-        fi
-    else
-        print_msg "❌ Boost library not found or not working" "$RED"
-        return 1
-    fi
-}
-
-# Function to create a simple client if needed
-create_client_if_missing() {
-    if [[ ! -f "$CLIENT_PY" ]]; then
-        print_msg "📝 Creating client.py (websocket version)..." "$BLUE"
-        
-        cat > "$CLIENT_PY" << 'EOF'
+    cat > "$CLIENT_PY" << 'EOF'
 #!/usr/bin/env python3
 """
-MAW Game Client - Auto Connect Version
+MAW Game Client - Robust Version
 """
 import asyncio
 import websockets
 import json
 import sys
 import time
+import signal
 
-class GameClient:
+class RobustClient:
     def __init__(self, player_name):
         self.name = player_name
         self.token = None
-        self.connected = False
+        self.ws = None
         
-    async def connect_and_play(self):
-        print(f"\n{'='*50}")
-        print(f"🎮 Player: {self.name}")
-        print(f"{'='*50}")
+    def signal_handler(self, sig, frame):
+        print(f"\n⚠️ Signal received, disconnecting {self.name}...")
+        if self.ws:
+            asyncio.create_task(self.ws.close())
+        sys.exit(0)
         
-        server_url = "ws://localhost:8888"
+    async def connect(self):
+        signal.signal(signal.SIGINT, self.signal_handler)
         
-        try:
-            # Connect to server
-            print(f"🔌 Connecting to {server_url}...")
-            async with websockets.connect(server_url, ping_interval=None) as websocket:
-                self.connected = True
-                print("✅ Connected to server!")
+        print(f"\n{'='*60}")
+        print(f"🎮 MAW Game Client - {self.name}")
+        print(f"{'='*60}")
+        
+        max_retries = 5
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"🔌 Attempt {attempt + 1}/{max_retries} to connect...")
                 
-                # Receive welcome message
-                welcome = await websocket.recv()
-                welcome_data = json.loads(welcome)
-                print(f"📨 Server: {welcome_data.get('message', 'Welcome')}")
-                
-                # Send join request
-                join_msg = {
-                    "type": "JOIN",
-                    "name": self.name
-                }
-                await websocket.send(json.dumps(join_msg))
-                print(f"📤 Joining as {self.name}...")
-                
-                # Get response
-                response = await websocket.recv()
-                resp_data = json.loads(response)
-                
-                if resp_data.get("type") == "JOIN_SUCCESS":
-                    self.token = resp_data.get("token")
-                    print(f"🎉 Successfully joined!")
-                    print(f"   Token: {self.token}")
-                    print(f"   Players: {resp_data.get('player_count', 0)}/4")
+                # Connect with timeout
+                async with websockets.connect(
+                    'ws://localhost:8888',
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=1
+                ) as websocket:
+                    self.ws = websocket
                     
-                    # Mark ready
-                    ready_msg = {
-                        "type": "READY",
-                        "token": self.token,
-                        "ready": True
-                    }
-                    await websocket.send(json.dumps(ready_msg))
-                    print("✅ Marked as READY")
-                    
-                # Listen for game events
-                print("\n⏳ Waiting for game to start...")
-                print("Press Ctrl+C to exit")
-                
-                while True:
+                    # Receive welcome
                     try:
-                        # Receive game messages
-                        message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
-                        data = json.loads(message)
-                        msg_type = data.get("type", "UNKNOWN")
+                        welcome = await asyncio.wait_for(websocket.recv(), timeout=5)
+                        welcome_data = json.loads(welcome)
+                        print(f"📨 Server: {welcome_data.get('message', 'Welcome')}")
                         
-                        if msg_type == "PHASE_CHANGE":
-                            print(f"\n🔄 Phase changed to: {data.get('phase')}")
-                        elif msg_type == "FULL_STATE":
-                            print(f"\n📊 Game state received")
-                        elif msg_type == "COMBAT_RESULT":
-                            print(f"\n⚔️ Combat result: {data.get('result')}")
-                        elif msg_type == "ERROR":
-                            print(f"\n❌ Error: {data.get('message')}")
-                        elif msg_type == "GAME_OVER":
-                            print(f"\n🏆 Game Over! Winner: {data.get('winner')}")
-                            break
+                        # Join game
+                        join_msg = {
+                            "type": "JOIN",
+                            "name": self.name
+                        }
+                        await websocket.send(json.dumps(join_msg))
+                        print(f"📤 Joining as {self.name}...")
+                        
+                        # Get response
+                        response = await asyncio.wait_for(websocket.recv(), timeout=5)
+                        resp_data = json.loads(response)
+                        
+                        if resp_data.get("type") == "JOIN_SUCCESS":
+                            self.token = resp_data.get("token")
+                            print(f"✅ Joined successfully!")
+                            print(f"   Token: {self.token[:8]}...")
+                            print(f"   Players: {resp_data.get('player_count', 0)}/4")
+                            
+                            # Mark ready
+                            ready_msg = {
+                                "type": "READY",
+                                "token": self.token,
+                                "ready": True
+                            }
+                            await websocket.send(json.dumps(ready_msg))
+                            print(f"✅ Marked as READY")
                         else:
-                            print(f"📨 [{msg_type}]")
+                            print(f"❌ Join failed: {resp_data.get('message', 'Unknown error')}")
+                            return
                             
                     except asyncio.TimeoutError:
-                        # No message, continue listening
+                        print("⏰ Timeout receiving from server")
                         continue
+                        
+                    # Game loop
+                    print(f"\n🎲 Waiting for game to start...")
+                    print(f"   (Press Ctrl+C in this window to exit)")
+                    
+                    try:
+                        while True:
+                            try:
+                                # Receive with timeout
+                                message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                                data = json.loads(message)
+                                msg_type = data.get("type")
+                                
+                                if msg_type == "PHASE_CHANGE":
+                                    phase = data.get("phase")
+                                    print(f"\n{'='*40}")
+                                    print(f"🔄 PHASE: {phase}")
+                                    print(f"{'='*40}")
+                                    if phase == "HERO_SELECT":
+                                        print("   Choose your hero from the list!")
+                                    elif phase == "RECRUIT":
+                                        print(f"   Turn: {data.get('turn', 1)}")
+                                        print(f"   Time: {data.get('time', 30)}s")
+                                    elif phase == "COMBAT":
+                                        print("   ⚔️ Combat in progress...")
+                                    elif phase == "GAME_OVER":
+                                        winner = data.get("winner", "Unknown")
+                                        print(f"   🏆 Winner: {winner}")
+                                        break
+                                        
+                                elif msg_type == "HERO_OFFER":
+                                    print(f"\n🎭 HERO SELECTION")
+                                    print(f"   Choose one:")
+                                    for i, hero in enumerate(data.get("heroes", [])):
+                                        print(f"   {i+1}. Hero Type {hero}")
+                                    print(f"   Time: {data.get('time', 15)}s")
+                                    
+                                elif msg_type == "FULL_STATE":
+                                    print(f"\n📊 Game state updated")
+                                    phase = data.get("data", {}).get("phase", "UNKNOWN")
+                                    print(f"   Current phase: {phase}")
+                                    
+                                elif msg_type == "COMBAT_RESULT":
+                                    result = data.get("result", "UNKNOWN")
+                                    print(f"\n⚔️ COMBAT RESULT: {result}")
+                                    if result == "WIN":
+                                        print(f"   ✅ You won!")
+                                        print(f"   💥 Damage dealt: {data.get('damage_dealt', 0)}")
+                                    elif result == "LOSE":
+                                        print(f"   ❌ You lost")
+                                        print(f"   💔 Damage taken: {data.get('damage_taken', 0)}")
+                                        
+                                elif msg_type == "GAME_OVER":
+                                    print(f"\n{'='*60}")
+                                    print(f"🏆 GAME OVER!")
+                                    print(f"   Winner: {data.get('winner', 'Unknown')}")
+                                    print(f"{'='*60}")
+                                    return
+                                    
+                                elif msg_type == "ERROR":
+                                    print(f"\n❌ ERROR: {data.get('message', 'Unknown error')}")
+                                    
+                                else:
+                                    # Silent handling of other messages
+                                    pass
+                                    
+                            except asyncio.TimeoutError:
+                                # No message, continue
+                                continue
+                                
+                    except websockets.exceptions.ConnectionClosed:
+                        print("\n📡 Connection closed by server")
+                        break
                     except KeyboardInterrupt:
-                        print("\n👋 Exiting...")
+                        print(f"\n👋 {self.name} disconnecting...")
                         break
                         
-        except ConnectionRefusedError:
-            print("❌ Could not connect to server. Is it running?")
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            
+            except ConnectionRefusedError:
+                print(f"❌ Cannot connect to server (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    print(f"   Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 1.5  # Exponential backoff
+            except Exception as e:
+                print(f"❌ Error: {type(e).__name__}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    
         print(f"\n🎮 {self.name} disconnected")
 
-async def main():
-    # Get player name from command line or use default
-    if len(sys.argv) > 1:
-        player_name = sys.argv[1]
-    else:
-        player_name = "Player_" + str(int(time.time()))[-4:]
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 client.py <player_name>")
+        print("Example: python3 client.py Sylvanas")
+        sys.exit(1)
+        
+    player_name = sys.argv[1]
+    client = RobustClient(player_name)
     
-    client = GameClient(player_name)
-    await client.connect_and_play()
+    try:
+        asyncio.run(client.connect())
+    except KeyboardInterrupt:
+        print(f"\n👋 Client {player_name} closed")
+    except Exception as e:
+        print(f"💥 Fatal error: {e}")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 Game client closed")
+    main()
 EOF
-        
-        chmod +x "$CLIENT_PY"
-        print_msg "✅ Created $CLIENT_PY" "$GREEN"
-    else
-        print_msg "✅ Client.py already exists" "$GREEN"
-    fi
+    
+    chmod +x "$CLIENT_PY"
+    print_msg "✅ Created robust client.py" "$GREEN"
 }
 
-# Function to start the server
-start_server() {
-    print_msg "🚀 Starting server..." "$BLUE"
+# Function to compile server with debug info
+compile_server_debug() {
+    print_msg "🔨 Compiling server with debug info..." "$BLUE"
     
-    # Kill any existing server
-    pkill -f "./$SERVER_BINARY" 2>/dev/null && print_msg "Stopped previous server" "$YELLOW"
-    sleep 1
-    
-    # Check if server binary exists
-    if [[ ! -f "./$SERVER_BINARY" ]]; then
-        print_msg "❌ Server binary not found! Compile first." "$RED"
+    if [[ ! -f "$SERVER_CPP" ]]; then
+        print_msg "❌ server.cpp not found!" "$RED"
         exit 1
     fi
     
-    # Start server in background
-    ./$SERVER_BINARY &
+    # Clean previous
+    rm -f "$SERVER_BINARY"
+    
+    # Compile with debug symbols and all warnings
+    g++ -std=c++17 -pthread -g -Wall -Wextra -Werror "$SERVER_CPP" \
+        -o "$SERVER_BINARY" -lboost_system 2>/tmp/compile_errors.log
+    
+    if [[ $? -eq 0 ]]; then
+        print_msg "✅ Server compiled with debug symbols" "$GREEN"
+        return 0
+    else
+        print_msg "❌ Compilation failed:" "$RED"
+        cat /tmp/compile_errors.log
+        return 1
+    fi
+}
+
+# Function to start server in background
+start_server_background() {
+    print_msg "🚀 Starting server in background..." "$BLUE"
+    
+    # Kill existing
+    pkill -f "./$SERVER_BINARY" 2>/dev/null
+    sleep 1
+    
+    if [[ ! -f "./$SERVER_BINARY" ]]; then
+        print_msg "❌ Server binary not found!" "$RED"
+        return 1
+    fi
+    
+    # Start server with GDB to catch crashes
+    echo "Starting server at $(date)" > /tmp/maw_server_debug.log
+    gdb -ex "set pagination off" \
+        -ex "run" \
+        -ex "bt" \
+        -ex "quit" \
+        ./"$SERVER_BINARY" >> /tmp/maw_server_debug.log 2>&1 &
     SERVER_PID=$!
     
     # Wait for server to start
-    print_msg "⏳ Waiting for server to initialize..." "$YELLOW"
+    print_msg "⏳ Waiting for server..." "$YELLOW"
     
-    for i in {1..15}; do
+    for i in {1..30}; do
         if ps -p $SERVER_PID > /dev/null 2>&1; then
-            # Check if port is listening
             if netstat -tln 2>/dev/null | grep -q ":$PORT"; then
-                print_msg "✅ Server is running (PID: $SERVER_PID, Port: $PORT)" "$GREEN"
-                return $SERVER_PID
+                print_msg "✅ Server running (PID: $SERVER_PID)" "$GREEN"
+                echo "Server PID: $SERVER_PID" > /tmp/maw_server.pid
+                return 0
             fi
         fi
         echo -n "."
@@ -268,144 +288,139 @@ start_server() {
     done
     
     print_msg "\n❌ Server failed to start properly" "$RED"
-    exit 1
+    print_msg "Check /tmp/maw_server_debug.log for details" "$YELLOW"
+    return 1
 }
 
-# Function to open 4 terminals with clients
-open_client_terminals() {
-    print_msg "🎮 Opening 4 game clients..." "$BLUE"
+# Function to start clients in separate terminals
+start_clients_separate() {
+    print_msg "🎮 Starting 4 game clients..." "$BLUE"
     
-    # List of player names (using Hearthstone heroes)
     PLAYER_NAMES=("Sylvanas" "Lich_King" "Millhouse" "Yogg_Saron")
     
-    # Check which terminal emulator is available
-    TERMINAL_CMD=""
-    
-    if command -v gnome-terminal > /dev/null 2>&1; then
-        TERMINAL_CMD="gnome-terminal --"
-    elif command -v konsole > /dev/null 2>&1; then
-        TERMINAL_CMD="konsole -e"
-    elif command -v xterm > /dev/null 2>&1; then
-        TERMINAL_CMD="xterm -e"
-    elif command -v terminator > /dev/null 2>&1; then
-        TERMINAL_CMD="terminator -e"
-    else
-        print_msg "❌ No terminal emulator found! Please install one." "$RED"
-        print_msg "Try: sudo apt-get install gnome-terminal or xterm" "$YELLOW"
-        exit 1
+    # Check for terminal
+    if ! command -v gnome-terminal > /dev/null 2>&1; then
+        print_msg "⚠️ gnome-terminal not found, installing..." "$YELLOW"
+        sudo apt-get install -y gnome-terminal 2>/dev/null || true
     fi
     
-    print_msg "Using terminal: $TERMINAL_CMD" "$YELLOW"
-    
-    # Open 4 terminals
-    for i in {0..3}; do
-        PLAYER_NAME="${PLAYER_NAMES[$i]}"
-        print_msg "Opening client for $PLAYER_NAME..." "$PURPLE"
+    # Start each client in separate terminal
+    for player in "${PLAYER_NAMES[@]}"; do
+        print_msg "Opening client for $player..." "$PURPLE"
         
-        # Create command for this client
-        CLIENT_CMD="python3 $CLIENT_PY '$PLAYER_NAME'"
+        # Create a script for this client
+        CLIENT_SCRIPT="/tmp/maw_client_${player}.sh"
+        cat > "$CLIENT_SCRIPT" << SCRIPT
+#!/bin/bash
+echo "Starting MAW Client: $player"
+cd "$PWD"
+python3 "$CLIENT_PY" "$player"
+echo "Press Enter to close this window..."
+read
+SCRIPT
+        chmod +x "$CLIENT_SCRIPT"
         
-        # Open terminal with client
-        if [[ "$TERMINAL_CMD" == "gnome-terminal --" ]]; then
-            gnome-terminal --title="MAW Game - $PLAYER_NAME" -- bash -c "$CLIENT_CMD; exec bash" &
-        elif [[ "$TERMINAL_CMD" == "konsole -e" ]]; then
-            konsole -e "bash -c '$CLIENT_CMD; exec bash'" &
-        elif [[ "$TERMINAL_CMD" == "xterm -e" ]]; then
-            xterm -title "MAW Game - $PLAYER_NAME" -e "bash -c '$CLIENT_CMD; exec bash'" &
-        elif [[ "$TERMINAL_CMD" == "terminator -e" ]]; then
-            terminator -e "bash -c '$CLIENT_CMD; exec bash'" &
-        fi
+        # Open new terminal
+        gnome-terminal --title="MAW Game - $player" \
+                      -- bash -c "$CLIENT_SCRIPT; exec bash" &
         
-        # Wait a bit between opening terminals
-        sleep 2
+        sleep 2  # Wait between opening terminals
     done
     
-    print_msg "✅ All 4 clients opened in separate terminals" "$GREEN"
+    print_msg "✅ All clients should open in separate windows" "$GREEN"
+    print_msg "⚠️ If windows don't open, run clients manually:" "$YELLOW"
+    for player in "${PLAYER_NAMES[@]}"; do
+        echo "  Terminal 1: python3 client.py $player"
+    done
 }
 
-# Function to show game status
-show_status() {
-    echo -e "\n${GREEN}========================================${NC}"
-    echo -e "${GREEN}           🎮 GAME STATUS             ${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${BLUE}Server:${NC}   PID: $SERVER_PID, Port: $PORT"
-    echo -e "${BLUE}Clients:${NC}  4 terminals opened"
-    echo -e "${BLUE}Players:${NC}  Sylvanas, Lich_King, Millhouse, Yogg_Saron"
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${YELLOW}Instructions for players:${NC}"
-    echo "1. In each terminal window, wait for connection"
-    echo "2. Each player will automatically join the game"
-    echo "3. All players will be marked as READY"
-    echo "4. Game will start automatically when all are ready"
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${YELLOW}To stop everything:${NC}"
-    echo "   Run: pkill -f './$SERVER_BINARY'"
-    echo "   Or: kill $SERVER_PID"
-    echo -e "${GREEN}========================================${NC}"
+# Function to check server status
+check_server() {
+    if [[ -f /tmp/maw_server.pid ]]; then
+        SERVER_PID=$(cat /tmp/maw_server.pid)
+        if ps -p $SERVER_PID > /dev/null 2>&1; then
+            if netstat -tln 2>/dev/null | grep -q ":$PORT"; then
+                return 0
+            fi
+        fi
+    fi
+    return 1
 }
 
-# Main execution
+# Main
 main() {
     echo ""
-    print_msg "🎮 Starting MAW Game Auto-Launcher..." "$BLUE"
+    print_msg "🎮 MAW Game Debug Launcher" "$BLUE"
     echo ""
     
-    # Step 1: Install dependencies
-    install_deps
+    # Create client
+    create_robust_client
     
-    # Step 2: Compile server
-    compile_server
-    if [[ $? -ne 0 ]]; then
-        print_msg "❌ Cannot continue without server" "$RED"
+    # Compile server
+    if ! compile_server_debug; then
         exit 1
     fi
     
-    # Step 3: Create client if needed
-    create_client_if_missing
+    # Start server
+    if ! start_server_background; then
+        # Show debug log
+        echo ""
+        print_msg "📋 Server Debug Log:" "$YELLOW"
+        tail -n 20 /tmp/maw_server_debug.log
+        exit 1
+    fi
     
-    # Step 4: Start server
-    start_server
-    SERVER_PID=$?
-    
-    # Give server a moment to fully initialize
+    # Wait a bit
     sleep 3
     
-    # Step 5: Open 4 client terminals
-    open_client_terminals
+    # Check server
+    if ! check_server; then
+        print_msg "❌ Server crashed after start" "$RED"
+        echo ""
+        print_msg "📋 Crash Log:" "$YELLOW"
+        tail -n 50 /tmp/maw_server_debug.log
+        exit 1
+    fi
     
-    # Step 6: Show status
-    show_status
+    # Start clients
+    start_clients_separate
     
-    # Keep script running to show status
-    print_msg "\n🎯 Game is running! All 4 clients should connect automatically." "$GREEN"
-    print_msg "🔄 Server is running in the background." "$YELLOW"
-    print_msg "❌ Press Ctrl+C in THIS window to stop everything" "$RED"
+    # Show status
+    echo ""
+    print_msg "==========================================" "$GREEN"
+    print_msg "        🎮 MAW GAME STATUS               " "$GREEN"
+    print_msg "==========================================" "$GREEN"
+    print_msg "Server:   PID: $SERVER_PID, Port: $PORT" "$BLUE"
+    print_msg "Status:   $(check_server && echo 'RUNNING ✅' || echo 'STOPPED ❌')" "$BLUE"
+    print_msg "Players:  4 clients starting..." "$BLUE"
+    print_msg "Logs:     /tmp/maw_server_debug.log" "$YELLOW"
+    print_msg "          /tmp/maw_server_debug.log" "$YELLOW"
+    print_msg "==========================================" "$GREEN"
+    print_msg "Manual start if clients didn't open:" "$YELLOW"
+    print_msg "  1. Open 4 terminal windows" "$YELLOW"
+    print_msg "  2. In each, run: python3 client.py <name>" "$YELLOW"
+    print_msg "     Names: Sylvanas Lich_King Millhouse Yogg_Saron" "$YELLOW"
+    print_msg "==========================================" "$GREEN"
     
-    # Wait for Ctrl+C
-    while true; do
-        sleep 1
+    # Monitor
+    print_msg "🔄 Monitoring server (Ctrl+C to stop)..." "$BLUE"
+    while check_server; do
+        sleep 5
     done
+    
+    print_msg "❌ Server stopped" "$RED"
 }
 
-# Cleanup function
+# Cleanup
 cleanup() {
     echo ""
     print_msg "🛑 Cleaning up..." "$YELLOW"
-    
-    # Kill server
-    if kill $SERVER_PID 2>/dev/null; then
-        print_msg "✅ Stopped server" "$GREEN"
-    fi
-    
-    # Kill any remaining client processes
-    pkill -f "python3 $CLIENT_PY" 2>/dev/null && print_msg "✅ Stopped clients" "$GREEN"
-    
-    print_msg "👋 Done!" "$GREEN"
+    pkill -f "./$SERVER_BINARY" 2>/dev/null
+    pkill -f "python3 $CLIENT_PY" 2>/dev/null
+    print_msg "✅ Cleanup complete" "$GREEN"
     exit 0
 }
 
-# Trap Ctrl+C for cleanup
-trap cleanup SIGINT
+trap cleanup SIGINT SIGTERM
 
-# Run main function
 main
