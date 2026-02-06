@@ -428,6 +428,7 @@ class GameClient:
             self.current_phase = GamePhase.HERO_SELECT
             self.phase_timer = message.get("time", 15)
             print("Hero selection started")
+            print(f"Available heroes: {[h.name for h in self.hero_offer]}")
             
         elif msg_type == "HERO_SELECTED":
             hero_type = HeroType.from_int(message.get("hero"))
@@ -651,22 +652,75 @@ class GameClient:
         if event.key == pygame.K_ESCAPE:
             return False
         
-        elif event.key == pygame.K_SPACE and self.current_phase == GamePhase.RECRUIT:
-            self.send_action("END_TURN")
+        # LOBBY PHASE shortcuts
+        elif self.current_phase == GamePhase.LOBBY:
+            if event.key in [pygame.K_RETURN, pygame.K_r, pygame.K_y, pygame.K_F5]:
+                self.send_action("READY", ready=True)
+                print(f"🟢 DEBUG: Sent READY via {pygame.key.name(event.key)}")
+                return True
         
-        elif event.key == pygame.K_r and self.current_phase == GamePhase.RECRUIT:
-            self.send_action("REFRESH_SHOP")
+        # HERO SELECTION shortcuts
+        elif self.current_phase == GamePhase.HERO_SELECT:
+            # Use number keys 1, 2, 3 to select heroes
+            if event.key == pygame.K_1 and len(self.hero_offer) > 0:
+                self.select_hero_by_index(0)
+                return True
+            elif event.key == pygame.K_2 and len(self.hero_offer) > 1:
+                self.select_hero_by_index(1)
+                return True
+            elif event.key == pygame.K_3 and len(self.hero_offer) > 2:
+                self.select_hero_by_index(2)
+                return True
+            # Use arrow keys
+            elif event.key == pygame.K_LEFT and len(self.hero_offer) > 0:
+                self.select_hero_by_index(0)
+                return True
+            elif event.key == pygame.K_DOWN and len(self.hero_offer) > 1:
+                self.select_hero_by_index(1)
+                return True
+            elif event.key == pygame.K_RIGHT and len(self.hero_offer) > 2:
+                self.select_hero_by_index(2)
+                return True
         
-        elif event.key == pygame.K_u and self.current_phase == GamePhase.RECRUIT:
-            self.send_action("UPGRADE_TAVERN")
+        # RECRUIT PHASE shortcuts
+        elif self.current_phase == GamePhase.RECRUIT:
+            if event.key == pygame.K_SPACE:
+                self.send_action("END_TURN")
+                return True
+            elif event.key == pygame.K_r:
+                self.send_action("REFRESH_SHOP")
+                return True
+            elif event.key == pygame.K_u:
+                self.send_action("UPGRADE_TAVERN")
+                return True
+            elif event.key == pygame.K_f:
+                self.send_action("FREEZE_SHOP")
+                return True
+            elif event.key == pygame.K_h:
+                self.send_action("USE_HERO_POWER")
+                return True
         
-        elif event.key == pygame.K_f and self.current_phase == GamePhase.RECRUIT:
-            self.send_action("FREEZE_SHOP")
-        
-        elif event.key == pygame.K_h and self.current_phase == GamePhase.RECRUIT:
-            self.send_action("USE_HERO_POWER")
+        # Debug key to show current phase
+        elif event.key == pygame.K_p:
+            print(f"🔍 DEBUG: Current phase = {self.current_phase}")
+            print(f"🔍 DEBUG: Hero offer = {[h.name for h in self.hero_offer]}")
+            print(f"🔍 DEBUG: Selected hero = {self.selected_hero}")
+            if self.player_data:
+                print(f"🔍 DEBUG: Player name = {self.player_data.name}")
+                print(f"🔍 DEBUG: Player ready = {self.player_data.is_ready}")
+            return True
         
         return True
+    
+    def select_hero_by_index(self, index):
+        """Select hero by index (0, 1, or 2)"""
+        if 0 <= index < len(self.hero_offer):
+            hero_type = self.hero_offer[index]
+            self.send_action("SELECT_HERO", hero=hero_type.value)
+            self.selected_hero = hero_type
+            print(f"🎭 Selected hero: {hero_type.name}")
+            return True
+        return False
     
     def handle_button_click(self, mouse_pos):
         """Handle UI button clicks"""
@@ -712,8 +766,7 @@ class GameClient:
         for i, hero_rect in enumerate(hero_rects):
             if i < len(self.hero_offer) and hero_rect.collidepoint(mouse_pos):
                 hero_type = self.hero_offer[i]
-                self.send_action("SELECT_HERO", hero=hero_type.value)
-                self.selected_hero = hero_type
+                self.select_hero_by_index(i)
                 return True
         
         return False
@@ -882,9 +935,31 @@ class GameClient:
             player_count += 1
         
         # Waiting message
-        if player_count < 4:
-            waiting_text = HEADER_FONT.render(f"Waiting for {4 - player_count} more players...", True, TEXT_COLOR)
+        if player_count < 5:
+            waiting_text = HEADER_FONT.render(f"Waiting for {4 - (player_count - 1)} more players...", True, TEXT_COLOR)
             self.screen.blit(waiting_text, (SCREEN_WIDTH // 2 - waiting_text.get_width() // 2, 400))
+        
+        # ADD INSTRUCTIONS
+        instructions = [
+            "Press ENTER, R, or Y to READY UP",
+            "Or click the red button at bottom-right",
+            f"Connected: {player_count - 1}/4 players"
+        ]
+        
+        y_pos = SCREEN_HEIGHT - 150
+        for instruction in instructions:
+            inst_text = SMALL_FONT.render(instruction, True, (100, 255, 100))
+            self.screen.blit(inst_text, (SCREEN_WIDTH // 2 - inst_text.get_width() // 2, y_pos))
+            y_pos += 25
+        
+        # Draw a visible button area for debugging
+        debug_rect = pygame.Rect(SCREEN_WIDTH - 150, SCREEN_HEIGHT - 80, 120, 50)
+        pygame.draw.rect(self.screen, (255, 0, 0, 100), debug_rect)  # Semi-transparent red
+        pygame.draw.rect(self.screen, (255, 255, 0), debug_rect, 2)  # Yellow border
+        
+        debug_text = SMALL_FONT.render("CLICK HERE", True, (255, 255, 255))
+        debug_text_rect = debug_text.get_rect(center=debug_rect.center)
+        self.screen.blit(debug_text, debug_text_rect)
         
         # Ready button
         self.draw_button("READY", "ready", SCREEN_WIDTH - 150, SCREEN_HEIGHT - 80, 120, 50)
@@ -899,6 +974,18 @@ class GameClient:
         timer_text = HEADER_FONT.render(f"Time: {int(self.phase_timer)}s", True, TEXT_COLOR)
         self.screen.blit(timer_text, (SCREEN_WIDTH - 150, 50))
         
+        # Instructions
+        instructions = [
+            "Click on a hero or press 1, 2, 3 to select",
+            "Press LEFT(1), DOWN(2), RIGHT(3) arrow keys"
+        ]
+        
+        y_pos = 120
+        for instruction in instructions:
+            inst_text = SMALL_FONT.render(instruction, True, (100, 255, 100))
+            self.screen.blit(inst_text, (SCREEN_WIDTH // 2 - inst_text.get_width() // 2, y_pos))
+            y_pos += 25
+        
         # Hero offers
         hero_rects = self.get_hero_selection_rects()
         
@@ -908,6 +995,11 @@ class GameClient:
                 
                 # Draw hero card
                 self.draw_hero_card(hero_type, rect.x, rect.y, rect.width, rect.height)
+                
+                # Draw selection number
+                number_text = HEADER_FONT.render(f"{i+1}", True, GOLD_COLOR)
+                number_rect = number_text.get_rect(center=(rect.centerx, rect.y - 20))
+                self.screen.blit(number_text, number_rect)
                 
                 # Highlight if selected
                 if self.selected_hero == hero_type:
@@ -1109,17 +1201,25 @@ class GameClient:
         
         # Determine color
         if self.hovered_button == button_name:
-            color = BUTTON_HOVER_COLOR
+            color = (0, 200, 0)  # Green when hovered
+            border_color = (0, 255, 0)
         else:
-            color = BUTTON_COLOR
+            color = (200, 0, 0)  # Red when normal
+            border_color = (255, 100, 100)
         
-        # Draw button
+        # Draw solid button
         pygame.draw.rect(self.screen, color, rect, border_radius=8)
-        pygame.draw.rect(self.screen, (255, 255, 255), rect, 2, border_radius=8)
+        pygame.draw.rect(self.screen, border_color, rect, 3, border_radius=8)
         
-        # Draw text
-        button_text = SMALL_FONT.render(text, True, TEXT_COLOR)
+        # Draw text with contrast
+        button_text = NORMAL_FONT.render(text, True, (255, 255, 255))
         text_rect = button_text.get_rect(center=rect.center)
+        
+        # Add text background for readability
+        text_bg = pygame.Rect(text_rect.x - 5, text_rect.y - 2, 
+                             text_rect.width + 10, text_rect.height + 4)
+        pygame.draw.rect(self.screen, (0, 0, 0, 180), text_bg, border_radius=3)
+        
         self.screen.blit(button_text, text_rect)
     
     def draw_timer(self):
@@ -1197,8 +1297,8 @@ class GameClient:
         # Draw abilities icons
         x_offset = 35
         for ability in minion.abilities[:3]:  # Show up to 3 abilities
-            if ability in self.icons:
-                surface.blit(self.icons[ability], (x_offset, 120))
+            if ability.lower() in self.icons:
+                surface.blit(self.icons[ability.lower()], (x_offset, 120))
                 x_offset += 25
         
         # Draw to screen
@@ -1333,12 +1433,15 @@ class GameClient:
         
         print(f"Starting game client for {self.player_name}")
         print("Controls:")
-        print("  SPACE - End turn")
-        print("  R - Refresh shop")
-        print("  U - Upgrade tavern")
-        print("  F - Freeze shop")
-        print("  H - Use hero power")
+        print("  LOBBY: ENTER, R, Y, F5 - Ready up")
+        print("  HERO SELECT: 1,2,3 or LEFT,DOWN,RIGHT - Pick hero")
+        print("  RECRUIT: SPACE - End turn")
+        print("  RECRUIT: R - Refresh shop")
+        print("  RECRUIT: U - Upgrade tavern")
+        print("  RECRUIT: F - Freeze shop")
+        print("  RECRUIT: H - Use hero power")
         print("  Right-click - Sell selected minion")
+        print("  P - Debug info")
         
         running = True
         while running:
