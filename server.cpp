@@ -744,6 +744,10 @@ public:
     void toggleFreeze() { frozen = !frozen; }
     bool isFrozen() const { return frozen; }
     
+    // اضافه کردن متد getMinionsRef
+    std::vector<std::shared_ptr<Minion>>& getMinionsRef() { return slots; }
+    const std::vector<std::shared_ptr<Minion>>& getMinions() const { return slots; }
+    
     void setTavernTier(int tier) { 
         tavernTier = std::min(6, std::max(1, tier)); 
     }
@@ -1116,6 +1120,8 @@ private:
 public:
     CombatLog(uint64_t s) : seed(s) {}
     
+    CombatLog() : seed(0) {} // سازنده پیش‌فرض
+    
     void addEvent(const std::string& type, const std::string& attackerId, 
                   const std::string& defenderId, int damage, const std::string& desc) {
         events.push_back({type, attackerId, defenderId, damage, desc, ++currentStep});
@@ -1164,6 +1170,13 @@ public:
         CombatLog log;
         std::vector<std::shared_ptr<Minion>> p1Dead;
         std::vector<std::shared_ptr<Minion>> p2Dead;
+        
+        // سازنده پیش‌فرض
+        Result() : winner(nullptr), loser(nullptr), damage(0), log(0), p1Dead({}), p2Dead({}) {}
+        
+        // سازنده با پارامترها
+        Result(std::shared_ptr<Player> w, std::shared_ptr<Player> l, int d, CombatLog lg)
+            : winner(w), loser(l), damage(d), log(lg), p1Dead({}), p2Dead({}) {}
     };
     
     Result simulate() {
@@ -1196,14 +1209,15 @@ public:
         
         // Determine winner
         Result result;
+        result.winner = nullptr;
+        result.loser = nullptr;
+        result.damage = 0;
         result.p1Dead = getDeadMinions(player1, p1Minions);
         result.p2Dead = getDeadMinions(player2, p2Minions);
+        result.log = log;
         
         if (p1Minions.empty() && p2Minions.empty()) {
             // Draw
-            result.winner = nullptr;
-            result.loser = nullptr;
-            result.damage = 0;
             log.addEvent("DRAW", "Combat ended in a draw");
         } else if (p1Minions.empty()) {
             // Player 2 wins
@@ -1219,7 +1233,6 @@ public:
             log.addEvent("WINNER", player1->getName() + " wins combat");
         }
         
-        result.log = log;
         return result;
     }
     
@@ -1296,7 +1309,6 @@ private:
     
     // For tracking game events
     std::vector<CombatSimulator::Result> combatResults;
-    std::unordered_map<std::string, std::shared_ptr<websocket::stream<tcp::socket>>> playerSockets;
     
 public:
     GameState() 
@@ -1640,9 +1652,6 @@ public:
             if (token2.empty()) {
                 // Player gets a bye (no combat)
                 CombatSimulator::Result byeResult;
-                byeResult.winner = player1;
-                byeResult.loser = nullptr;
-                byeResult.damage = 0;
                 results.push_back(byeResult);
                 continue;
             }
