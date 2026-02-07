@@ -10,14 +10,15 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple, Any
 import asyncio
 import queue
+import random
 
 # Initialize Pygame
 pygame.init()
 pygame.font.init()
 
 # Constants
-SCREEN_WIDTH = 1200
-SCREEN_HEIGHT = 800
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 600
 FPS = 60
 
 # Colors
@@ -33,6 +34,7 @@ BUTTON_HOVER_COLOR = (80, 140, 230)
 SHOP_SLOT_COLOR = (50, 55, 85)
 BOARD_SLOT_COLOR = (45, 50, 75)
 HAND_SLOT_COLOR = (55, 60, 95)
+HERO_CARD_COLOR = (50, 60, 90)
 
 # Fonts
 TITLE_FONT = pygame.font.Font(None, 48)
@@ -73,6 +75,226 @@ class HeroType(Enum):
                 return hero
         return HeroType.SYLVANAS
 
+# ==================== Hero Classes ====================
+
+class BaseHero:
+    def __init__(self, screen, x, y, hero_type):
+        self.screen = screen
+        self.x = x
+        self.y = y
+        self.hero_type = hero_type
+        self.name = ""
+        self.hero_power_name = ""
+        self.hero_power_cost = 0
+        self.hero_power_description = ""
+        self.is_passive = False
+        self.portrait = None
+        self.selected = False
+        
+    def load_portrait(self, image_path):
+        """بارگذاری تصویر هیرو"""
+        try:
+            self.portrait = pygame.image.load(image_path)
+            self.portrait = pygame.transform.scale(self.portrait, (100, 100))
+        except Exception as e:
+            print(f"❌ Error loading hero image {image_path}: {e}")
+            # Create placeholder
+            self.portrait = pygame.Surface((100, 100))
+            self.portrait.fill((100, 100, 150))
+            pygame.draw.rect(self.portrait, (200, 200, 200), (0, 0, 100, 100), 2)
+            font = pygame.font.Font(None, 24)
+            name_text = font.render(self.name[:6], True, (255, 255, 255))
+            self.portrait.blit(name_text, (10, 40))
+    
+    def draw_card(self, x=None, y=None, width=140, height=200):
+        """رسم کارت هیرو"""
+        if x is None:
+            x = self.x
+        if y is None:
+            y = self.y
+            
+        # Draw card background
+        card_rect = pygame.Rect(x, y, width, height)
+        color = HIGHLIGHT_COLOR if self.selected else HERO_CARD_COLOR
+        pygame.draw.rect(self.screen, color, card_rect, border_radius=10)
+        pygame.draw.rect(self.screen, BORDER_COLOR, card_rect, 3, border_radius=10)
+        
+        # Draw portrait
+        if self.portrait:
+            portrait_rect = self.portrait.get_rect(center=(x + width // 2, y + 60))
+            self.screen.blit(self.portrait, portrait_rect)
+        
+        # Draw name
+        name_text = SMALL_FONT.render(self.name, True, TEXT_COLOR)
+        name_rect = name_text.get_rect(center=(x + width // 2, y + 130))
+        self.screen.blit(name_text, name_rect)
+        
+        # Draw power cost and name
+        power_text = f"{self.hero_power_name} ({self.hero_power_cost} Gold)"
+        if self.is_passive:
+            power_text = f"{self.hero_power_name} (Passive)"
+            
+        power_name = TINY_FONT.render(power_text, True, (200, 200, 100) if not self.is_passive else (100, 200, 255))
+        power_rect = power_name.get_rect(center=(x + width // 2, y + 150))
+        self.screen.blit(power_name, power_rect)
+        
+        # Draw description (wrap text)
+        desc_lines = self.wrap_text(self.hero_power_description, TINY_FONT, width - 20)
+        for i, line in enumerate(desc_lines):
+            desc_text = TINY_FONT.render(line, True, (200, 200, 200))
+            self.screen.blit(desc_text, (x + 10, y + 165 + i * 15))
+    
+    def wrap_text(self, text, font, max_width):
+        """شکستن متن به چند خط"""
+        words = text.split(' ')
+        lines = []
+        current_line = []
+        
+        for word in words:
+            current_line.append(word)
+            test_line = ' '.join(current_line)
+            test_width = font.render(test_line, True, (0, 0, 0)).get_width()
+            
+            if test_width > max_width:
+                current_line.pop()
+                lines.append(' '.join(current_line))
+                current_line = [word]
+        
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        return lines
+    
+    def draw_compact(self, x, y):
+        """رسم هیرو به صورت فشرده (برای پنل اطلاعات)"""
+        # Draw portrait
+        if self.portrait:
+            scaled_portrait = pygame.transform.scale(self.portrait, (40, 40))
+            self.screen.blit(scaled_portrait, (x, y))
+        
+        # Draw name
+        name_text = TINY_FONT.render(self.name[:10], True, TEXT_COLOR)
+        self.screen.blit(name_text, (x + 45, y))
+        
+        # Draw power cost
+        cost_text = f"{self.hero_power_cost}G"
+        if self.is_passive:
+            cost_text = "Passive"
+            
+        power_text = TINY_FONT.render(cost_text, True, (200, 200, 100))
+        self.screen.blit(power_text, (x + 45, y + 15))
+
+class Sylvanas(BaseHero):
+    def __init__(self, screen, x, y):
+        super().__init__(screen, x, y, HeroType.SYLVANAS)
+        self.name = "Sylvanas Windrunner"
+        self.hero_power_name = "Reclaimed Souls"
+        self.hero_power_cost = 1
+        self.hero_power_description = "Give +2/+1 to your minions that died last combat."
+        self.load_portrait("./bgknowhow-main/images/heroes/BG23_HERO_306_render_80.webp")
+
+class LichKing(BaseHero):
+    def __init__(self, screen, x, y):
+        super().__init__(screen, x, y, HeroType.LICH_KING)
+        self.name = "The Lich King"
+        self.hero_power_name = "Reborn Rites"
+        self.hero_power_cost = 1
+        self.hero_power_description = "Give a friendly minion Reborn for the next combat only."
+        self.load_portrait("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_22_render_80.webp")
+
+class MillhouseManastorm(BaseHero):
+    def __init__(self, screen, x, y):
+        super().__init__(screen, x, y, HeroType.MILLHOUSE)
+        self.name = "Millhouse Manastorm"
+        self.hero_power_name = "Manastorm"
+        self.hero_power_cost = 0
+        self.hero_power_description = "Minions cost 2 Gold. Refreshes cost 2 Gold. Start with 3 Gold. (Tavern upgrades cost 1 more)"
+        self.is_passive = True
+        self.load_portrait("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_49_render_80.webp")
+
+class YoggSaron(BaseHero):
+    def __init__(self, screen, x, y):
+        super().__init__(screen, x, y, HeroType.YOGG)
+        self.name = "Yogg-Saron"
+        self.hero_power_name = "Puzzle Box"
+        self.hero_power_cost = 2
+        self.hero_power_description = "Add a random minion from your current Tavern Tier to your hand."
+        self.current_tavern_tier = 1
+        self.load_portrait("./bgknowhow-main/images/heroes/TB_BaconShop_HERO_35_render_80.webp")
+    
+    def draw_card(self, x=None, y=None, width=140, height=200):
+        super().draw_card(x, y, width, height)
+        
+        # Add tavern tier info for Yogg
+        if x and y:
+            tier_text = TINY_FONT.render(f"Current Tavern Tier: {self.current_tavern_tier}", True, (150, 220, 150))
+            self.screen.blit(tier_text, (x + 10, y + height - 25))
+
+class Patches(BaseHero):
+    def __init__(self, screen, x, y):
+        super().__init__(screen, x, y, HeroType.PATCHES)
+        self.name = "Patches the Pirate"
+        self.hero_power_name = "Pirate's Greed"
+        self.hero_power_cost = 0
+        self.hero_power_description = "After you buy a Pirate, give it +1/+1."
+        self.is_passive = True
+        self.load_portrait("./bgknowhow-main/images/heroes/BG26_HERO_102_render_80.webp")
+
+class Ragnaros(BaseHero):
+    def __init__(self, screen, x, y):
+        super().__init__(screen, x, y, HeroType.RAGNAROS)
+        self.name = "Ragnaros the Firelord"
+        self.hero_power_name = "DIE, INSECT!"
+        self.hero_power_cost = 2
+        self.hero_power_description = "Deal 8 damage to two random enemy minions."
+        self.load_portrait("./bgknowhow-main/images/heroes/BG26_HERO_103_render_80.webp")
+
+class Kelthuzad(BaseHero):
+    def __init__(self, screen, x, y):
+        super().__init__(screen, x, y, HeroType.KELTHUZAD)
+        self.name = "Kel'Thuzad"
+        self.hero_power_name = "HARVEST TIME!"
+        self.hero_power_cost = 1
+        self.hero_power_description = "Give a friendly minion 'Deathrattle: Summon a 1/1 Skeleton.'"
+        self.load_portrait("./bgknowhow-main/images/heroes/BG26_HERO_104_render_80.webp")
+
+class Malganis(BaseHero):
+    def __init__(self, screen, x, y):
+        super().__init__(screen, x, y, HeroType.MALGANIS)
+        self.name = "Mal'Ganis"
+        self.hero_power_name = "Grasp of Mal'Ganis"
+        self.hero_power_cost = 1
+        self.hero_power_description = "Give a friendly Demon +2/+2."
+        self.load_portrait("./bgknowhow-main/images/heroes/BG26_HERO_105_render_80.webp")
+
+class HeroFactory:
+    """Factory class for creating hero instances"""
+    
+    @staticmethod
+    def create_hero(hero_type, screen, x=0, y=0):
+        """ایجاد نمونه هیرو بر اساس نوع"""
+        if hero_type == HeroType.SYLVANAS:
+            return Sylvanas(screen, x, y)
+        elif hero_type == HeroType.LICH_KING:
+            return LichKing(screen, x, y)
+        elif hero_type == HeroType.MILLHOUSE:
+            return MillhouseManastorm(screen, x, y)
+        elif hero_type == HeroType.YOGG:
+            return YoggSaron(screen, x, y)
+        elif hero_type == HeroType.PATCHES:
+            return Patches(screen, x, y)
+        elif hero_type == HeroType.RAGNAROS:
+            return Ragnaros(screen, x, y)
+        elif hero_type == HeroType.KELTHUZAD:
+            return Kelthuzad(screen, x, y)
+        elif hero_type == HeroType.MALGANIS:
+            return Malganis(screen, x, y)
+        else:
+            # Return default hero
+            return Sylvanas(screen, x, y)
+
+# ==================== Data Classes ====================
+
 @dataclass
 class MinionData:
     minion_id: str
@@ -91,9 +313,15 @@ class MinionData:
     taunt: bool = False
     windfury: bool = False
     poisonous: bool = False
+    x: float = 0
+    y: float = 0
+    board_slot: int = -1
     
     @classmethod
     def from_json(cls, data: dict) -> 'MinionData':
+        if data is None:
+            return None
+            
         abilities = data.get("abilities", [])
         return cls(
             minion_id=data.get("minion_id", ""),
@@ -115,33 +343,13 @@ class MinionData:
         )
 
 @dataclass
-class HeroData:
-    type: HeroType
-    name: str
-    power_cost: int
-    power_description: str
-    power_used: bool
-    passive: bool
-    
-    @classmethod
-    def from_json(cls, data: dict) -> 'HeroData':
-        return cls(
-            type=HeroType.from_int(data.get("type", 0)),
-            name=data.get("name", "Unknown"),
-            power_cost=data.get("power_cost", 0),
-            power_description=data.get("power_description", ""),
-            power_used=data.get("power_used", False),
-            passive=data.get("passive", False)
-        )
-
-@dataclass
 class PlayerData:
     token: str
     name: str
     gold: int
     health: int
     tavern_tier: int
-    hero: Optional[HeroData]
+    hero: Optional[HeroType]
     board: List[MinionData]
     hand: List[MinionData]
     shop: List[Optional[MinionData]]
@@ -156,10 +364,21 @@ class PlayerData:
     @classmethod
     def from_json(cls, data: dict) -> 'PlayerData':
         hero_data = data.get("hero")
-        hero = HeroData.from_json(hero_data) if hero_data else None
+        hero_type = None
+        if hero_data:
+            hero_type = HeroType.from_int(hero_data.get("type", 0))
         
-        board = [MinionData.from_json(m) for m in data.get("board", [])]
-        hand = [MinionData.from_json(m) for m in data.get("hand", [])]
+        board = []
+        for m in data.get("board", []):
+            minion = MinionData.from_json(m)
+            if minion:
+                board.append(minion)
+        
+        hand = []
+        for m in data.get("hand", []):
+            minion = MinionData.from_json(m)
+            if minion:
+                hand.append(minion)
         
         shop_data = data.get("shop", {}).get("slots", [])
         shop = []
@@ -175,7 +394,7 @@ class PlayerData:
             gold=data.get("gold", START_GOLD),
             health=data.get("health", START_HEALTH),
             tavern_tier=data.get("tavern_tier", 1),
-            hero=hero,
+            hero=hero_type,
             board=board,
             hand=hand,
             shop=shop,
@@ -198,61 +417,103 @@ class WebSocketClient:
         self.message_queue = queue.Queue()
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 5
+        self.send_lock = threading.Lock()
+        self.send_queue = queue.Queue()
+        self.is_sending = False
         
     def connect(self):
         try:
             self.ws = websocket.WebSocket()
+            self.ws.settimeout(10)
             self.ws.connect(self.server_url)
             self.connected = True
             self.reconnect_attempts = 0
             
-            # Send join message
+            self.send_thread = threading.Thread(target=self._process_send_queue, daemon=True)
+            self.send_thread.start()
+            
             join_message = {
                 "type": "JOIN",
                 "token": self.token,
                 "name": self.name
             }
-            self.send(join_message)
+            self._safe_send(join_message)
             
-            # Start receive thread
             self.receive_thread = threading.Thread(target=self._receive_messages, daemon=True)
             self.receive_thread.start()
             
-            print(f"Connected to server as {self.name}")
+            print(f"✅ Connected to server as {self.name}")
             return True
             
         except Exception as e:
-            print(f"Connection error: {e}")
+            print(f"❌ Connection error: {e}")
             return False
+    
+    def _process_send_queue(self):
+        """پردازش صف ارسال به صورت ترتیبی"""
+        while self.connected:
+            try:
+                time.sleep(0.01)
+                
+                if not self.send_queue.empty():
+                    message = self.send_queue.get()
+                    with self.send_lock:
+                        if self.ws and self.connected:
+                            self.ws.send(message)
+                    time.sleep(0.02)
+            except Exception as e:
+                print(f"⚠️ Error in send queue processing: {e}")
+                if "Connection" in str(e):
+                    self.connected = False
+    
+    def _safe_send(self, data: dict):
+        """ارسال ایمن پیام با استفاده از صف"""
+        if self.connected:
+            try:
+                message = json.dumps(data)
+                self.send_queue.put(message)
+                return True
+            except Exception as e:
+                print(f"⚠️ Error queueing message: {e}")
+                return False
+        return False
     
     def reconnect(self):
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             return False
         
         self.reconnect_attempts += 1
-        print(f"Reconnecting... Attempt {self.reconnect_attempts}")
-        time.sleep(2 ** self.reconnect_attempts)  # Exponential backoff
+        print(f"🔄 Reconnecting... Attempt {self.reconnect_attempts}")
+        time.sleep(2 ** self.reconnect_attempts)
         
         try:
             self.ws = websocket.WebSocket()
+            self.ws.settimeout(10)
             self.ws.connect(self.server_url)
+            
+            while not self.send_queue.empty():
+                try:
+                    self.send_queue.get_nowait()
+                except queue.Empty:
+                    break
             
             reconnect_message = {
                 "type": "RECONNECT",
                 "token": self.token,
                 "name": self.name
             }
-            self.send(reconnect_message)
+            self._safe_send(reconnect_message)
             
             self.connected = True
-            print("Reconnected successfully")
+            print("✅ Reconnected successfully")
             return True
             
         except Exception as e:
-            print(f"Reconnect failed: {e}")
+            print(f"❌ Reconnect failed: {e}")
             return False
     
     def _receive_messages(self):
+        """دریافت پیام‌ها از سرور"""
         while self.connected:
             try:
                 message = self.ws.recv()
@@ -260,35 +521,45 @@ class WebSocketClient:
                     data = json.loads(message)
                     self.message_queue.put(data)
             except websocket.WebSocketConnectionClosedException:
-                print("WebSocket connection closed")
+                print("🔌 WebSocket connection closed")
                 self.connected = False
                 break
+            except websocket.WebSocketTimeoutException:
+                try:
+                    if self.connected:
+                        ping_msg = json.dumps({"type": "PING"})
+                        with self.send_lock:
+                            self.ws.send(ping_msg)
+                except:
+                    pass
+                continue
             except Exception as e:
-                print(f"Error receiving message: {e}")
-                self.connected = False
-                break
+                if "Connection" in str(e):
+                    print("🔌 Connection lost")
+                    self.connected = False
+                    break
+                else:
+                    print(f"⚠️ Error receiving message: {e}")
     
     def send(self, data: dict):
-        if self.connected and self.ws:
-            try:
-                self.ws.send(json.dumps(data))
-                return True
-            except Exception as e:
-                print(f"Error sending message: {e}")
-                self.connected = False
-                return False
-        return False
+        """API عمومی برای ارسال پیام"""
+        return self._safe_send(data)
     
     def get_message(self):
+        """دریافت پیام از صف"""
         try:
             return self.message_queue.get_nowait()
         except queue.Empty:
             return None
     
     def close(self):
+        """بستن اتصال"""
         self.connected = False
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except:
+                pass
 
 class GameClient:
     def __init__(self, server_url: str, player_name: str):
@@ -306,6 +577,7 @@ class GameClient:
         self.hovered_button = None
         self.hero_offer = []
         self.selected_hero = None
+        self.hero_instances = []  # لیست نمونه‌های هیرو برای نمایش
         self.combat_log = []
         self.game_over_data = None
         
@@ -324,37 +596,17 @@ class GameClient:
         self.player_data = None
         self.opponents = []
         
+        # اضافه کردن rate limiting برای ارسال
+        self.last_send_time = 0
+        self.min_send_interval = 0.1
+        
         # Initialize
         self.connect_to_server()
     
     def load_images(self):
         """Load game images"""
         try:
-            # Load hero images
-            self.hero_images = {}
-            hero_files = {
-                HeroType.SYLVANAS: "../bgknowhow-main/images/heroes/BG23_HERO_306_render_80.webp",
-                HeroType.LICH_KING: "../bgknowhow-main/images/heroes/TB_BaconShop_HERO_22_render_80.webp",
-                HeroType.MILLHOUSE: "../bgknowhow-main/images/heroes/TB_BaconShop_HERO_49_render_80.webp",
-                HeroType.YOGG: "../bgknowhow-main/images/heroes/TB_BaconShop_HERO_35_render_80.webp",
-                HeroType.PATCHES: "../bgknowhow-main/images/heroes/BG26_HERO_102_render_80.webp",
-                HeroType.RAGNAROS: "../bgknowhow-main/images/heroes/BG26_HERO_103_render_80.webp",
-                HeroType.KELTHUZAD: "../bgknowhow-main/images/heroes/BG26_HERO_104_render_80.webp",
-                HeroType.MALGANIS: "../bgknowhow-main/images/heroes/BG26_HERO_105_render_80.webp"
-            }
-            
-            for hero_type, filepath in hero_files.items():
-                try:
-                    image = pygame.image.load(filepath)
-                    self.hero_images[hero_type] = pygame.transform.scale(image, (100, 140))
-                except:
-                    # Create placeholder if image not found
-                    surface = pygame.Surface((100, 140))
-                    surface.fill((100, 100, 150))
-                    pygame.draw.rect(surface, (200, 200, 200), (0, 0, 100, 140), 2)
-                    self.hero_images[hero_type] = surface
-            
-            # Load minion images (placeholder - you should load actual images)
+            # Load minion images (placeholder)
             self.minion_images = {}
             
             # Load icons
@@ -378,7 +630,7 @@ class GameClient:
                 self.background.fill(BACKGROUND_COLOR)
                 
         except Exception as e:
-            print(f"Error loading images: {e}")
+            print(f"⚠️ Error loading images: {e}")
     
     def create_icon(self, text, color):
         """Create a simple icon for abilities"""
@@ -396,10 +648,10 @@ class GameClient:
     def connect_to_server(self):
         """Connect to the game server"""
         if self.ws_client.connect():
-            print(f"Connected to server as {self.player_name}")
+            print(f"✅ Connected to server as {self.player_name}")
             return True
         else:
-            print("Failed to connect to server")
+            print("❌ Failed to connect to server")
             return False
     
     def handle_message(self, message):
@@ -407,37 +659,56 @@ class GameClient:
         msg_type = message.get("type")
         
         if msg_type == "WELCOME":
-            print("Connected to game server")
+            print("✅ Connected to game server")
             
         elif msg_type == "JOIN_SUCCESS":
-            print(f"Joined successfully as {self.player_name}")
+            print(f"✅ Joined successfully as {self.player_name}")
             
         elif msg_type == "PLAYER_JOINED":
             player_name = message.get("name")
             player_count = message.get("player_count")
-            print(f"{player_name} joined the game ({player_count}/4)")
+            print(f"👤 {player_name} joined the game ({player_count}/4)")
             
         elif msg_type == "PLAYER_READY":
             player_name = message.get("name")
             ready = message.get("ready")
             status = "ready" if ready else "not ready"
-            print(f"{player_name} is {status}")
+            print(f"✅ {player_name} is {status}")
             
         elif msg_type == "HERO_OFFER":
             self.hero_offer = [HeroType.from_int(h) for h in message.get("heroes", [])]
             self.current_phase = GamePhase.HERO_SELECT
             self.phase_timer = message.get("time", 15)
-            print("Hero selection started")
-            print(f"Available heroes: {[h.name for h in self.hero_offer]}")
+            self.selected_hero = None  # ریست انتخاب قبلی
+            self.hero_instances = []  # پاک کردن لیست قبلی
+            
+            print(f"🎭 Hero selection started with {len(self.hero_offer)} heroes: {[h.name for h in self.hero_offer]}")
+            
+            # ایجاد نمونه‌های هیرو برای نمایش
+            num_heroes = len(self.hero_offer)
+            total_width = num_heroes * 150  # 140 width + 10 spacing
+            start_x = (SCREEN_WIDTH - total_width) // 2
+            
+            for i, hero_type in enumerate(self.hero_offer):
+                hero = HeroFactory.create_hero(hero_type, self.screen)
+                hero.x = start_x + i * 150
+                hero.y = SCREEN_HEIGHT // 2 - 100
+                hero.selected = (self.selected_hero == hero_type)
+                self.hero_instances.append(hero)
             
         elif msg_type == "HERO_SELECTED":
             hero_type = HeroType.from_int(message.get("hero"))
-            print(f"Hero selected: {hero_type.name}")
+            print(f"🎭 Hero selected: {hero_type.name}")
+            
+            # آپدیت وضعیت انتخاب
+            self.selected_hero = hero_type
+            for hero in self.hero_instances:
+                hero.selected = (hero.hero_type == hero_type)
             
         elif msg_type == "PLAYER_HERO_SELECTED":
             player_name = message.get("name")
             hero_type = HeroType.from_int(message.get("hero"))
-            print(f"{player_name} selected {hero_type.name}")
+            print(f"🎭 {player_name} selected {hero_type.name}")
             
         elif msg_type == "FULL_STATE":
             self.update_game_state(message.get("data", {}))
@@ -446,60 +717,63 @@ class GameClient:
             phase = message.get("phase")
             self.current_phase = GamePhase(phase)
             self.phase_timer = message.get("time", 30)
-            print(f"Phase changed to: {phase}")
+            print(f"🔄 Phase changed to: {phase}")
             
         elif msg_type == "BUY_SUCCESS":
-            print("Minion bought successfully")
+            print("🛒 Minion bought successfully")
             
         elif msg_type == "SELL_SUCCESS":
-            print("Minion sold successfully")
+            print("💰 Minion sold successfully")
             
         elif msg_type == "PLAY_SUCCESS":
-            print("Minion played successfully")
+            print("🎮 Minion played successfully")
             
         elif msg_type == "REFRESH_SUCCESS":
-            print("Shop refreshed")
+            print("🔄 Shop refreshed")
             
         elif msg_type == "UPGRADE_SUCCESS":
-            print("Tavern upgraded")
+            print("📈 Tavern upgraded")
             
         elif msg_type == "FREEZE_SUCCESS":
             frozen = message.get("frozen")
-            print(f"Shop {'frozen' if frozen else 'unfrozen'}")
+            print(f"❄️ Shop {'frozen' if frozen else 'unfrozen'}")
             
         elif msg_type == "TURN_ENDED":
-            print("Turn ended")
+            print("⏹️ Turn ended")
             
         elif msg_type == "HERO_POWER_USED":
-            print("Hero power used")
+            print("✨ Hero power used")
             
         elif msg_type == "COMBAT_RESULT":
             result = message.get("result")
             if result == "WIN":
-                print("You won the combat!")
+                print("⚔️ You won the combat!")
             elif result == "LOSE":
-                print("You lost the combat")
+                print("💀 You lost the combat")
             elif result == "BYE":
-                print("No opponent this round")
+                print("😴 No opponent this round")
             
         elif msg_type == "GAME_OVER":
             self.game_over_data = message
             self.current_phase = GamePhase.GAME_OVER
-            print("Game Over!")
+            print("🏆 Game Over!")
             
         elif msg_type == "ERROR":
             error_msg = message.get("message", "Unknown error")
-            print(f"Error: {error_msg}")
+            print(f"❌ Error: {error_msg}")
             
         elif msg_type == "GRACE_PERIOD":
-            print("Grace period started - finish your actions!")
+            print("⏰ Grace period started - finish your actions!")
             
         elif msg_type == "RECONNECT_SUCCESS":
-            print("Reconnected successfully")
+            print("🔁 Reconnected successfully")
             self.update_game_state(message.get("full_state", {}))
             
+        elif msg_type == "PONG":
+            pass
+            
         else:
-            print(f"Unknown message type: {msg_type}")
+            print(f"⚠️ Unknown message type: {msg_type}")
     
     def update_game_state(self, state_data):
         """Update the game state from server data"""
@@ -533,16 +807,31 @@ class GameClient:
             self.opponents = [p for p in self.opponents if not p.is_zombie]
             
         except Exception as e:
-            print(f"Error updating game state: {e}")
+            print(f"❌ Error updating game state: {e}")
     
     def send_action(self, action_type: str, **kwargs):
-        """Send an action to the server"""
+        """Send an action to the server with rate limiting"""
+        current_time = time.time()
+        
+        # Rate limiting: حداقل 100ms بین ارسال‌ها
+        if current_time - self.last_send_time < self.min_send_interval:
+            time.sleep(self.min_send_interval - (current_time - self.last_send_time))
+        
         action = {
             "type": action_type,
             "token": self.token,
             **kwargs
         }
-        return self.ws_client.send(action)
+        
+        print(f"📤 Sending action: {action_type} with data: {kwargs}")
+        
+        result = self.ws_client.send(action)
+        self.last_send_time = time.time()
+        
+        if not result:
+            print(f"❌ Failed to send action: {action_type}")
+        
+        return result
     
     def handle_events(self):
         """Handle pygame events"""
@@ -575,8 +864,20 @@ class GameClient:
             
             # Handle hero selection
             if self.current_phase == GamePhase.HERO_SELECT:
-                self.handle_hero_selection_click(mouse_pos)
-                return
+                for i, hero in enumerate(self.hero_instances):
+                    hero_rect = pygame.Rect(hero.x, hero.y, 140, 200)
+                    if hero_rect.collidepoint(mouse_pos):
+                        # ارسال فوری درخواست انتخاب هیرو به سرور
+                        print(f"🎭 Clicked on hero: {hero.hero_type.name} (value: {hero.hero_type.value})")
+                        
+                        # آپدیت وضعیت انتخاب محلی
+                        self.selected_hero = hero.hero_type
+                        for h in self.hero_instances:
+                            h.selected = (h.hero_type == hero.hero_type)
+                        
+                        # ارسال به سرور
+                        self.send_action("SELECT_HERO", hero=hero.hero_type.value)
+                        return
             
             # Handle shop minion click
             if self.current_phase == GamePhase.RECRUIT and self.player_data:
@@ -595,7 +896,6 @@ class GameClient:
                 # Check board
                 for i, minion in enumerate(self.player_data.board):
                     if self.is_point_in_board_slot(mouse_pos, i):
-                        # Could select for selling or hero power target
                         self.selected_minion = minion
                         return
         
@@ -614,7 +914,12 @@ class GameClient:
             for i in range(MAX_BOARD_SIZE):
                 if self.is_point_in_board_slot(mouse_pos, i):
                     # Check if slot is empty
-                    occupied = any(m.board_slot == i for m in self.player_data.board)
+                    occupied = False
+                    for m in self.player_data.board:
+                        if hasattr(m, 'board_slot') and m.board_slot == i:
+                            occupied = True
+                            break
+                    
                     if not occupied:
                         self.send_action("PLAY_MINION", 
                                        instance_id=self.dragging_minion.instance_id,
@@ -652,75 +957,22 @@ class GameClient:
         if event.key == pygame.K_ESCAPE:
             return False
         
-        # LOBBY PHASE shortcuts
-        elif self.current_phase == GamePhase.LOBBY:
-            if event.key in [pygame.K_RETURN, pygame.K_r, pygame.K_y, pygame.K_F5]:
-                self.send_action("READY", ready=True)
-                print(f"🟢 DEBUG: Sent READY via {pygame.key.name(event.key)}")
-                return True
+        elif event.key == pygame.K_SPACE and self.current_phase == GamePhase.RECRUIT:
+            self.send_action("END_TURN")
         
-        # HERO SELECTION shortcuts
-        elif self.current_phase == GamePhase.HERO_SELECT:
-            # Use number keys 1, 2, 3 to select heroes
-            if event.key == pygame.K_1 and len(self.hero_offer) > 0:
-                self.select_hero_by_index(0)
-                return True
-            elif event.key == pygame.K_2 and len(self.hero_offer) > 1:
-                self.select_hero_by_index(1)
-                return True
-            elif event.key == pygame.K_3 and len(self.hero_offer) > 2:
-                self.select_hero_by_index(2)
-                return True
-            # Use arrow keys
-            elif event.key == pygame.K_LEFT and len(self.hero_offer) > 0:
-                self.select_hero_by_index(0)
-                return True
-            elif event.key == pygame.K_DOWN and len(self.hero_offer) > 1:
-                self.select_hero_by_index(1)
-                return True
-            elif event.key == pygame.K_RIGHT and len(self.hero_offer) > 2:
-                self.select_hero_by_index(2)
-                return True
+        elif event.key == pygame.K_r and self.current_phase == GamePhase.RECRUIT:
+            self.send_action("REFRESH_SHOP")
         
-        # RECRUIT PHASE shortcuts
-        elif self.current_phase == GamePhase.RECRUIT:
-            if event.key == pygame.K_SPACE:
-                self.send_action("END_TURN")
-                return True
-            elif event.key == pygame.K_r:
-                self.send_action("REFRESH_SHOP")
-                return True
-            elif event.key == pygame.K_u:
-                self.send_action("UPGRADE_TAVERN")
-                return True
-            elif event.key == pygame.K_f:
-                self.send_action("FREEZE_SHOP")
-                return True
-            elif event.key == pygame.K_h:
-                self.send_action("USE_HERO_POWER")
-                return True
+        elif event.key == pygame.K_u and self.current_phase == GamePhase.RECRUIT:
+            self.send_action("UPGRADE_TAVERN")
         
-        # Debug key to show current phase
-        elif event.key == pygame.K_p:
-            print(f"🔍 DEBUG: Current phase = {self.current_phase}")
-            print(f"🔍 DEBUG: Hero offer = {[h.name for h in self.hero_offer]}")
-            print(f"🔍 DEBUG: Selected hero = {self.selected_hero}")
-            if self.player_data:
-                print(f"🔍 DEBUG: Player name = {self.player_data.name}")
-                print(f"🔍 DEBUG: Player ready = {self.player_data.is_ready}")
-            return True
+        elif event.key == pygame.K_f and self.current_phase == GamePhase.RECRUIT:
+            self.send_action("FREEZE_SHOP")
+        
+        elif event.key == pygame.K_h and self.current_phase == GamePhase.RECRUIT:
+            self.send_action("USE_HERO_POWER")
         
         return True
-    
-    def select_hero_by_index(self, index):
-        """Select hero by index (0, 1, or 2)"""
-        if 0 <= index < len(self.hero_offer):
-            hero_type = self.hero_offer[index]
-            self.send_action("SELECT_HERO", hero=hero_type.value)
-            self.selected_hero = hero_type
-            print(f"🎭 Selected hero: {hero_type.name}")
-            return True
-        return False
     
     def handle_button_click(self, mouse_pos):
         """Handle UI button clicks"""
@@ -759,18 +1011,6 @@ class GameClient:
         
         return False
     
-    def handle_hero_selection_click(self, mouse_pos):
-        """Handle hero selection clicks"""
-        hero_rects = self.get_hero_selection_rects()
-        
-        for i, hero_rect in enumerate(hero_rects):
-            if i < len(self.hero_offer) and hero_rect.collidepoint(mouse_pos):
-                hero_type = self.hero_offer[i]
-                self.select_hero_by_index(i)
-                return True
-        
-        return False
-    
     def start_dragging_minion(self, minion, mouse_pos):
         """Start dragging a minion"""
         self.dragging_minion = minion
@@ -794,14 +1034,6 @@ class GameClient:
                 buttons["sell"] = pygame.Rect(SCREEN_WIDTH - 300, 350, 120, 40)
         
         return buttons
-    
-    def get_hero_selection_rects(self):
-        """Get rectangles for hero selection"""
-        rects = []
-        start_x = SCREEN_WIDTH // 2 - 200
-        for i in range(3):
-            rects.append(pygame.Rect(start_x + i * 150, SCREEN_HEIGHT // 2, 140, 180))
-        return rects
     
     def is_point_in_shop_slot(self, point, slot_index):
         """Check if point is in a shop slot"""
@@ -935,31 +1167,9 @@ class GameClient:
             player_count += 1
         
         # Waiting message
-        if player_count < 5:
-            waiting_text = HEADER_FONT.render(f"Waiting for {4 - (player_count - 1)} more players...", True, TEXT_COLOR)
+        if player_count < 4:
+            waiting_text = HEADER_FONT.render(f"Waiting for {4 - player_count} more players...", True, TEXT_COLOR)
             self.screen.blit(waiting_text, (SCREEN_WIDTH // 2 - waiting_text.get_width() // 2, 400))
-        
-        # ADD INSTRUCTIONS
-        instructions = [
-            "Press ENTER, R, or Y to READY UP",
-            "Or click the red button at bottom-right",
-            f"Connected: {player_count - 1}/4 players"
-        ]
-        
-        y_pos = SCREEN_HEIGHT - 150
-        for instruction in instructions:
-            inst_text = SMALL_FONT.render(instruction, True, (100, 255, 100))
-            self.screen.blit(inst_text, (SCREEN_WIDTH // 2 - inst_text.get_width() // 2, y_pos))
-            y_pos += 25
-        
-        # Draw a visible button area for debugging
-        debug_rect = pygame.Rect(SCREEN_WIDTH - 150, SCREEN_HEIGHT - 80, 120, 50)
-        pygame.draw.rect(self.screen, (255, 0, 0, 100), debug_rect)  # Semi-transparent red
-        pygame.draw.rect(self.screen, (255, 255, 0), debug_rect, 2)  # Yellow border
-        
-        debug_text = SMALL_FONT.render("CLICK HERE", True, (255, 255, 255))
-        debug_text_rect = debug_text.get_rect(center=debug_rect.center)
-        self.screen.blit(debug_text, debug_text_rect)
         
         # Ready button
         self.draw_button("READY", "ready", SCREEN_WIDTH - 150, SCREEN_HEIGHT - 80, 120, 50)
@@ -974,36 +1184,22 @@ class GameClient:
         timer_text = HEADER_FONT.render(f"Time: {int(self.phase_timer)}s", True, TEXT_COLOR)
         self.screen.blit(timer_text, (SCREEN_WIDTH - 150, 50))
         
-        # Instructions
-        instructions = [
-            "Click on a hero or press 1, 2, 3 to select",
-            "Press LEFT(1), DOWN(2), RIGHT(3) arrow keys"
-        ]
+        # Instruction
+        instruction = NORMAL_FONT.render("Click on a hero to select it", True, (200, 200, 100))
+        self.screen.blit(instruction, (SCREEN_WIDTH // 2 - instruction.get_width() // 2, 100))
         
-        y_pos = 120
-        for instruction in instructions:
-            inst_text = SMALL_FONT.render(instruction, True, (100, 255, 100))
-            self.screen.blit(inst_text, (SCREEN_WIDTH // 2 - inst_text.get_width() // 2, y_pos))
-            y_pos += 25
+        # Draw hero cards
+        for hero in self.hero_instances:
+            hero.draw_card()
         
-        # Hero offers
-        hero_rects = self.get_hero_selection_rects()
+        # Draw selection status
+        if self.selected_hero:
+            status_text = HEADER_FONT.render(f"Selected: {self.selected_hero.name}", True, HIGHLIGHT_COLOR)
+            self.screen.blit(status_text, (SCREEN_WIDTH // 2 - status_text.get_width() // 2, SCREEN_HEIGHT - 100))
         
-        for i, hero_type in enumerate(self.hero_offer):
-            if i < len(hero_rects):
-                rect = hero_rects[i]
-                
-                # Draw hero card
-                self.draw_hero_card(hero_type, rect.x, rect.y, rect.width, rect.height)
-                
-                # Draw selection number
-                number_text = HEADER_FONT.render(f"{i+1}", True, GOLD_COLOR)
-                number_rect = number_text.get_rect(center=(rect.centerx, rect.y - 20))
-                self.screen.blit(number_text, number_rect)
-                
-                # Highlight if selected
-                if self.selected_hero == hero_type:
-                    pygame.draw.rect(self.screen, HIGHLIGHT_COLOR, rect, 4)
+        # Draw waiting message
+        waiting_text = NORMAL_FONT.render("Waiting for other players to select heroes...", True, (150, 150, 200))
+        self.screen.blit(waiting_text, (SCREEN_WIDTH // 2 - waiting_text.get_width() // 2, SCREEN_HEIGHT - 150))
     
     def draw_recruit_screen(self):
         """Draw recruit phase screen"""
@@ -1034,6 +1230,16 @@ class GameClient:
         # Draw selected minion info
         if self.selected_minion:
             self.draw_minion_info(self.selected_minion)
+        
+        # Draw hero power status
+        if self.player_data.hero:
+            hero = HeroFactory.create_hero(self.player_data.hero, self.screen)
+            hero.draw_compact(20, 130)
+            
+            # Draw hero power available
+            if hero.hero_power_cost <= self.player_data.gold and not hero.is_passive:
+                power_status = SMALL_FONT.render("Hero Power Available!", True, (100, 255, 100))
+                self.screen.blit(power_status, (20, 175))
     
     def draw_player_info_panel(self):
         """Draw player information panel"""
@@ -1046,28 +1252,21 @@ class GameClient:
         self.screen.blit(name_text, (40, 30))
         
         # Health
-        health_text = NORMAL_FONT.render(f"Health: {self.player_data.health}", True, HEALTH_COLOR)
+        health_color = HEALTH_COLOR if self.player_data.health < 15 else (100, 255, 100)
+        health_text = NORMAL_FONT.render(f"❤️ {self.player_data.health}", True, health_color)
         self.screen.blit(health_text, (40, 60))
         
         # Gold
-        gold_text = NORMAL_FONT.render(f"Gold: {self.player_data.gold}", True, GOLD_COLOR)
+        gold_text = NORMAL_FONT.render(f"💰 {self.player_data.gold}", True, GOLD_COLOR)
         self.screen.blit(gold_text, (40, 85))
         
         # Tavern tier
-        tier_text = NORMAL_FONT.render(f"Tavern Tier: {self.player_data.tavern_tier}", True, (100, 200, 255))
+        tier_text = NORMAL_FONT.render(f"🏆 Tier {self.player_data.tavern_tier}", True, (100, 200, 255))
         self.screen.blit(tier_text, (180, 60))
         
         # Wins/Losses
-        stats_text = NORMAL_FONT.render(f"Wins: {self.player_data.wins} Losses: {self.player_data.losses}", True, TEXT_COLOR)
+        stats_text = NORMAL_FONT.render(f"✅ {self.player_data.wins} ❌ {self.player_data.losses}", True, TEXT_COLOR)
         self.screen.blit(stats_text, (180, 85))
-        
-        # Hero
-        if self.player_data.hero:
-            hero_name = SMALL_FONT.render(self.player_data.hero.name, True, TEXT_COLOR)
-            self.screen.blit(hero_name, (300, 30))
-            
-            power_text = TINY_FONT.render(f"Power ({self.player_data.hero.power_cost}G): {self.player_data.hero.power_description}", True, (200, 200, 100))
-            self.screen.blit(power_text, (300, 50))
     
     def draw_opponents_panel(self):
         """Draw opponents panel"""
@@ -1075,38 +1274,44 @@ class GameClient:
         pygame.draw.rect(self.screen, PANEL_COLOR, panel_rect, border_radius=10)
         pygame.draw.rect(self.screen, BORDER_COLOR, panel_rect, 2, border_radius=10)
         
-        title = NORMAL_FONT.render("Opponents", True, TEXT_COLOR)
+        title = NORMAL_FONT.render("👥 Opponents", True, TEXT_COLOR)
         self.screen.blit(title, (SCREEN_WIDTH - 360, 30))
         
         y = 60
-        for opponent in self.opponents[:3]:  # Show up to 3 opponents
+        for opponent in self.opponents[:3]:
             if opponent.is_zombie:
                 continue
                 
+            # Draw opponent info
             name_text = SMALL_FONT.render(f"{opponent.name}", True, TEXT_COLOR)
             self.screen.blit(name_text, (SCREEN_WIDTH - 360, y))
             
-            health_text = TINY_FONT.render(f"HP: {opponent.health}", True, HEALTH_COLOR)
+            # Health with color coding
+            health_color = HEALTH_COLOR if opponent.health < 15 else (100, 255, 100)
+            health_text = TINY_FONT.render(f"❤️ {opponent.health}", True, health_color)
             self.screen.blit(health_text, (SCREEN_WIDTH - 260, y))
             
-            tier_text = TINY_FONT.render(f"Tier: {opponent.tavern_tier}", True, (100, 200, 255))
+            # Tier
+            tier_text = TINY_FONT.render(f"🏆 {opponent.tavern_tier}", True, (100, 200, 255))
             self.screen.blit(tier_text, (SCREEN_WIDTH - 200, y))
             
+            # Hero
             if opponent.hero:
-                hero_text = TINY_FONT.render(f"Hero: {opponent.hero.name[:10]}", True, (200, 200, 100))
-                self.screen.blit(hero_text, (SCREEN_WIDTH - 140, y))
+                hero = HeroFactory.create_hero(opponent.hero, self.screen)
+                hero_name = TINY_FONT.render(f"{hero.name[:8]}", True, (200, 200, 100))
+                self.screen.blit(hero_name, (SCREEN_WIDTH - 140, y))
             
             y += 30
     
     def draw_shop(self):
         """Draw the shop"""
         # Shop title
-        shop_title = HEADER_FONT.render("SHOP", True, TEXT_COLOR)
+        shop_title = HEADER_FONT.render("🛒 SHOP", True, TEXT_COLOR)
         self.screen.blit(shop_title, (150, 100))
         
         # Frozen indicator
         if self.player_data and self.player_data.shop_frozen:
-            frozen_text = NORMAL_FONT.render("FROZEN", True, (100, 200, 255))
+            frozen_text = NORMAL_FONT.render("❄️ FROZEN", True, (100, 200, 255))
             self.screen.blit(frozen_text, (250, 100))
         
         # Shop slots
@@ -1127,14 +1332,18 @@ class GameClient:
                 self.draw_minion_in_rect(minion, rect)
                 
                 # Draw cost
-                cost_text = SMALL_FONT.render("3G", True, GOLD_COLOR)
+                cost = 3  # Default cost
+                if self.player_data.hero == HeroType.MILLHOUSE:
+                    cost = 2
+                    
+                cost_text = SMALL_FONT.render(f"{cost}G", True, GOLD_COLOR)
                 cost_rect = cost_text.get_rect(center=(rect.centerx, rect.top - 10))
                 self.screen.blit(cost_text, cost_rect)
     
     def draw_board(self):
         """Draw the board"""
         # Board title
-        board_title = HEADER_FONT.render("BOARD", True, TEXT_COLOR)
+        board_title = HEADER_FONT.render("⚔️ BOARD", True, TEXT_COLOR)
         self.screen.blit(board_title, (150, 300))
         
         # Board slots
@@ -1155,7 +1364,7 @@ class GameClient:
             
             # Draw minion if present
             for minion in self.player_data.board:
-                if minion.board_slot == i:
+                if minion.board_slot == i or self.player_data.board.index(minion) == i:
                     self.draw_minion_in_rect(minion, rect)
                     break
         
@@ -1166,7 +1375,7 @@ class GameClient:
     def draw_hand(self):
         """Draw the hand"""
         # Hand title
-        hand_title = HEADER_FONT.render("HAND", True, TEXT_COLOR)
+        hand_title = HEADER_FONT.render("🎴 HAND", True, TEXT_COLOR)
         self.screen.blit(hand_title, (150, 500))
         
         # Hand slots
@@ -1201,31 +1410,68 @@ class GameClient:
         
         # Determine color
         if self.hovered_button == button_name:
-            color = (0, 200, 0)  # Green when hovered
-            border_color = (0, 255, 0)
+            color = BUTTON_HOVER_COLOR
         else:
-            color = (200, 0, 0)  # Red when normal
-            border_color = (255, 100, 100)
+            color = BUTTON_COLOR
         
-        # Draw solid button
+        # Draw button
         pygame.draw.rect(self.screen, color, rect, border_radius=8)
-        pygame.draw.rect(self.screen, border_color, rect, 3, border_radius=8)
+        pygame.draw.rect(self.screen, (255, 255, 255), rect, 2, border_radius=8)
         
-        # Draw text with contrast
-        button_text = NORMAL_FONT.render(text, True, (255, 255, 255))
+        # Add icon based on button type
+        icon = ""
+        if button_name == "refresh":
+            icon = "🔄 "
+        elif button_name == "upgrade":
+            icon = "📈 "
+        elif button_name == "freeze":
+            icon = "❄️ "
+        elif button_name == "hero_power":
+            icon = "✨ "
+        elif button_name == "end_turn":
+            icon = "⏹️ "
+        elif button_name == "sell":
+            icon = "💰 "
+        elif button_name == "ready":
+            icon = "✅ "
+        
+        # Draw text with icon
+        button_text = SMALL_FONT.render(icon + text, True, TEXT_COLOR)
         text_rect = button_text.get_rect(center=rect.center)
-        
-        # Add text background for readability
-        text_bg = pygame.Rect(text_rect.x - 5, text_rect.y - 2, 
-                             text_rect.width + 10, text_rect.height + 4)
-        pygame.draw.rect(self.screen, (0, 0, 0, 180), text_bg, border_radius=3)
-        
         self.screen.blit(button_text, text_rect)
     
     def draw_timer(self):
         """Draw phase timer"""
-        timer_text = HEADER_FONT.render(f"Time: {int(self.phase_timer)}s", True, TEXT_COLOR)
-        self.screen.blit(timer_text, (SCREEN_WIDTH // 2 - timer_text.get_width() // 2, 20))
+        # Draw progress bar
+        bar_width = 300
+        bar_height = 20
+        bar_x = SCREEN_WIDTH // 2 - bar_width // 2
+        bar_y = 20
+        
+        # Background bar
+        pygame.draw.rect(self.screen, (50, 50, 70), (bar_x, bar_y, bar_width, bar_height), border_radius=10)
+        
+        # Progress fill
+        max_time = 30  # Default turn time
+        progress = self.phase_timer / max_time
+        fill_width = max(0, int(bar_width * progress))
+        
+        # Color based on time remaining
+        if progress > 0.5:
+            color = (100, 200, 100)
+        elif progress > 0.25:
+            color = (255, 200, 100)
+        else:
+            color = (255, 100, 100)
+            
+        pygame.draw.rect(self.screen, color, (bar_x, bar_y, fill_width, bar_height), border_radius=10)
+        
+        # Border
+        pygame.draw.rect(self.screen, BORDER_COLOR, (bar_x, bar_y, bar_width, bar_height), 2, border_radius=10)
+        
+        # Timer text
+        timer_text = HEADER_FONT.render(f"{int(self.phase_timer)}s", True, TEXT_COLOR)
+        self.screen.blit(timer_text, (SCREEN_WIDTH // 2 - timer_text.get_width() // 2, bar_y - 25))
     
     def draw_minion_info(self, minion):
         """Draw detailed information about a minion"""
@@ -1238,25 +1484,34 @@ class GameClient:
         name_text = NORMAL_FONT.render(minion.name, True, TEXT_COLOR)
         self.screen.blit(name_text, (panel_rect.x + 10, panel_rect.y + 10))
         
-        # Stats
-        stats_text = SMALL_FONT.render(f"Attack: {minion.attack} Health: {minion.health}", True, TEXT_COLOR)
-        self.screen.blit(stats_text, (panel_rect.x + 10, panel_rect.y + 40))
+        # Stats with icons
+        attack_text = SMALL_FONT.render(f"⚔️ {minion.attack}", True, (255, 100, 100))
+        health_text = SMALL_FONT.render(f"❤️ {minion.health}", True, (100, 255, 100))
+        self.screen.blit(attack_text, (panel_rect.x + 10, panel_rect.y + 40))
+        self.screen.blit(health_text, (panel_rect.x + 80, panel_rect.y + 40))
         
         # Tier and tribe
-        tier_text = SMALL_FONT.render(f"Tier: {minion.tier} Tribe: {minion.tribe}", True, TEXT_COLOR)
-        self.screen.blit(tier_text, (panel_rect.x + 10, panel_rect.y + 60))
+        tier_text = SMALL_FONT.render(f"🏆 Tier {minion.tier}", True, TEXT_COLOR)
+        tribe_text = SMALL_FONT.render(f"🐾 {minion.tribe}", True, (200, 200, 100))
+        self.screen.blit(tier_text, (panel_rect.x + 10, panel_rect.y + 65))
+        self.screen.blit(tribe_text, (panel_rect.x + 100, panel_rect.y + 65))
         
         # Golden indicator
         if minion.golden:
-            golden_text = SMALL_FONT.render("GOLDEN", True, GOLD_COLOR)
-            self.screen.blit(golden_text, (panel_rect.x + 10, panel_rect.y + 80))
+            golden_text = SMALL_FONT.render("🌟 GOLDEN", True, GOLD_COLOR)
+            self.screen.blit(golden_text, (panel_rect.x + 10, panel_rect.y + 90))
         
         # Abilities
-        y = panel_rect.y + 100
-        for ability in minion.abilities:
-            ability_text = TINY_FONT.render(ability, True, (200, 200, 100))
+        y = panel_rect.y + 115
+        if minion.abilities:
+            ability_text = SMALL_FONT.render("Abilities:", True, (200, 200, 100))
             self.screen.blit(ability_text, (panel_rect.x + 10, y))
             y += 20
+            
+            for ability in minion.abilities[:3]:
+                ability_name = TINY_FONT.render(f"• {ability}", True, (200, 200, 200))
+                self.screen.blit(ability_name, (panel_rect.x + 20, y))
+                y += 15
     
     def draw_minion(self, minion):
         """Draw a minion at its current position"""
@@ -1264,11 +1519,18 @@ class GameClient:
         surface = pygame.Surface((100, 140), pygame.SRCALPHA)
         
         # Draw minion background
-        color = (70, 75, 105) if minion.golden else (50, 55, 85)
-        pygame.draw.rect(surface, color, (0, 0, 100, 140), border_radius=8)
+        if minion.golden:
+            # Golden gradient
+            for i in range(140):
+                color_value = 50 + int(25 * (i / 140))
+                pygame.draw.line(surface, (color_value + 20, color_value + 15, color_value), 
+                               (0, i), (100, i))
+        else:
+            surface.fill((50, 55, 85))
+        
         pygame.draw.rect(surface, BORDER_COLOR, (0, 0, 100, 140), 2, border_radius=8)
         
-        # Draw minion image (placeholder)
+        # Draw minion image placeholder
         pygame.draw.rect(surface, (100, 100, 150), (10, 10, 80, 80), border_radius=5)
         
         # Draw name
@@ -1296,7 +1558,7 @@ class GameClient:
         
         # Draw abilities icons
         x_offset = 35
-        for ability in minion.abilities[:3]:  # Show up to 3 abilities
+        for ability in minion.abilities[:2]:  # Show up to 2 abilities
             if ability.lower() in self.icons:
                 surface.blit(self.icons[ability.lower()], (x_offset, 120))
                 x_offset += 25
@@ -1317,29 +1579,6 @@ class GameClient:
         self.draw_minion(minion)
         minion.x, minion.y = original_x, original_y
     
-    def draw_hero_card(self, hero_type, x, y, width, height):
-        """Draw a hero selection card"""
-        # Card background
-        card_rect = pygame.Rect(x, y, width, height)
-        pygame.draw.rect(self.screen, PANEL_COLOR, card_rect, border_radius=10)
-        pygame.draw.rect(self.screen, BORDER_COLOR, card_rect, 3, border_radius=10)
-        
-        # Hero image
-        if hero_type in self.hero_images:
-            hero_img = self.hero_images[hero_type]
-            img_rect = hero_img.get_rect(center=(x + width // 2, y + 70))
-            self.screen.blit(hero_img, img_rect)
-        
-        # Hero name
-        name_text = NORMAL_FONT.render(hero_type.name.replace("_", " "), True, TEXT_COLOR)
-        name_rect = name_text.get_rect(center=(x + width // 2, y + height - 50))
-        self.screen.blit(name_text, name_rect)
-        
-        # Hero type
-        type_text = SMALL_FONT.render("HERO", True, (200, 200, 100))
-        type_rect = type_text.get_rect(center=(x + width // 2, y + height - 30))
-        self.screen.blit(type_text, type_rect)
-    
     def draw_combat_screen(self):
         """Draw combat calculation screen"""
         # Background
@@ -1348,7 +1587,7 @@ class GameClient:
         self.screen.blit(overlay, (0, 0))
         
         # Title
-        title = TITLE_FONT.render("COMBAT IN PROGRESS", True, TEXT_COLOR)
+        title = TITLE_FONT.render("⚔️ COMBAT IN PROGRESS ⚔️", True, TEXT_COLOR)
         self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, SCREEN_HEIGHT // 2 - 100))
         
         # Loading animation
@@ -1362,7 +1601,7 @@ class GameClient:
         self.draw_combat_screen()
         
         # Add log replay specific text
-        replay_text = HEADER_FONT.render("Replaying combat log...", True, TEXT_COLOR)
+        replay_text = HEADER_FONT.render("📜 Replaying combat log...", True, TEXT_COLOR)
         self.screen.blit(replay_text, (SCREEN_WIDTH // 2 - replay_text.get_width() // 2, SCREEN_HEIGHT // 2 + 50))
     
     def draw_game_over_screen(self):
@@ -1377,7 +1616,7 @@ class GameClient:
         
         # Title
         winner = self.game_over_data.get("winner", "Unknown")
-        title = TITLE_FONT.render("GAME OVER", True, TEXT_COLOR)
+        title = TITLE_FONT.render("🏆 GAME OVER 🏆", True, TEXT_COLOR)
         self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 50))
         
         # Winner
@@ -1403,20 +1642,24 @@ class GameClient:
             pygame.draw.rect(self.screen, BORDER_COLOR, card_rect, 2, border_radius=10)
             
             # Player info
-            name_text = NORMAL_FONT.render(f"{i+1}. {player_name}", True, TEXT_COLOR)
+            rank = f"{i+1}."
+            if player_name == winner:
+                rank = "👑"
+                
+            name_text = NORMAL_FONT.render(f"{rank} {player_name}", True, TEXT_COLOR)
             self.screen.blit(name_text, (card_rect.x + 20, card_rect.y + 15))
             
-            stats_text = SMALL_FONT.render(f"HP: {player_health} | W: {player_wins} L: {player_losses} | Dmg: {player_damage}", True, TEXT_COLOR)
+            stats_text = SMALL_FONT.render(f"❤️ {player_health} | ✅ {player_wins} ❌ {player_losses} | ⚔️ {player_damage}", True, TEXT_COLOR)
             self.screen.blit(stats_text, (card_rect.x + 20, card_rect.y + 45))
             
-            hero_text = SMALL_FONT.render(f"Hero: {player_hero}", True, (200, 200, 100))
+            hero_text = SMALL_FONT.render(f"🎭 {player_hero}", True, (200, 200, 100))
             self.screen.blit(hero_text, (card_rect.x + 250, card_rect.y + 30))
             
             y += 100
         
-        # Restart button
-        restart_rect = pygame.Rect(SCREEN_WIDTH // 2 - 100, y + 20, 200, 50)
-        self.draw_button("EXIT GAME", "exit", restart_rect.x, restart_rect.y, restart_rect.width, restart_rect.height)
+        # Exit button
+        exit_rect = pygame.Rect(SCREEN_WIDTH // 2 - 100, y + 20, 200, 50)
+        self.draw_button("🚪 EXIT GAME", "exit", exit_rect.x, exit_rect.y, exit_rect.width, exit_rect.height)
     
     def update_timer(self):
         """Update the phase timer"""
@@ -1431,17 +1674,18 @@ class GameClient:
         """Main game loop"""
         clock = pygame.time.Clock()
         
-        print(f"Starting game client for {self.player_name}")
-        print("Controls:")
-        print("  LOBBY: ENTER, R, Y, F5 - Ready up")
-        print("  HERO SELECT: 1,2,3 or LEFT,DOWN,RIGHT - Pick hero")
-        print("  RECRUIT: SPACE - End turn")
-        print("  RECRUIT: R - Refresh shop")
-        print("  RECRUIT: U - Upgrade tavern")
-        print("  RECRUIT: F - Freeze shop")
-        print("  RECRUIT: H - Use hero power")
+        print(f"🎮 Starting game client for {self.player_name}")
+        print("=" * 50)
+        print("🎯 Controls:")
+        print("  SPACE - End turn")
+        print("  R - Refresh shop")
+        print("  U - Upgrade tavern")
+        print("  F - Freeze shop")
+        print("  H - Use hero power")
         print("  Right-click - Sell selected minion")
-        print("  P - Debug info")
+        print("  Left-click - Select/Buy/Play minions")
+        print("=" * 50)
+        print("⚠️  Note: Actions are rate-limited to prevent server errors")
         
         running = True
         while running:
@@ -1458,7 +1702,7 @@ class GameClient:
             # Reconnect if disconnected
             if not self.ws_client.connected and self.current_phase != GamePhase.GAME_OVER:
                 if not self.ws_client.reconnect():
-                    print("Lost connection to server")
+                    print("❌ Lost connection to server")
                     running = False
                     break
             
