@@ -58,11 +58,7 @@ enum class HeroType {
     SYLVANAS,
     LICH_KING,
     MILLHOUSE,
-    YOGG,
-    PATCHES,
-    RAGNAROS,
-    KELTHUZAD,
-    MALGANIS
+    YOGG
 };
 
 enum class MinionType {
@@ -498,30 +494,6 @@ public:
                 name = "Yogg-Saron";
                 powerCost = 2;
                 powerDescription = "Add a random minion from your current Tavern Tier to your hand.";
-                passive = false;
-                break;
-            case HeroType::PATCHES:
-                name = "Patches the Pirate";
-                powerCost = 0;
-                powerDescription = "After you buy a Pirate, give it +1/+1.";
-                passive = true;
-                break;
-            case HeroType::RAGNAROS:
-                name = "Ragnaros the Firelord";
-                powerCost = 2;
-                powerDescription = "Deal 8 damage to two random enemy minions.";
-                passive = false;
-                break;
-            case HeroType::KELTHUZAD:
-                name = "Kel'Thuzad";
-                powerCost = 1;
-                powerDescription = "Give a friendly minion 'Deathrattle: Summon a 1/1 Skeleton.'";
-                passive = false;
-                break;
-            case HeroType::MALGANIS:
-                name = "Mal'Ganis";
-                powerCost = 1;
-                powerDescription = "Give a friendly Demon +2/+2.";
                 passive = false;
                 break;
         }
@@ -1271,11 +1243,7 @@ public:
             HeroType::SYLVANAS,
             HeroType::LICH_KING,
             HeroType::MILLHOUSE,
-            HeroType::YOGG,
-            HeroType::PATCHES,
-            HeroType::RAGNAROS,
-            HeroType::KELTHUZAD,
-            HeroType::MALGANIS
+            HeroType::YOGG
         };
         
         std::shuffle(availableHeroes.begin(), availableHeroes.end(), rng);
@@ -1914,20 +1882,57 @@ void GameServer::updateLobbyPhase(float delta) {
 void GameServer::updateHeroSelectPhase(float delta) {
     gameState->updatePhaseTimer(delta);
     
+    // دیباگ: نمایش تایمر
+    static float lastDisplay = 100;
+    if (static_cast<int>(gameState->getPhaseTimer()) != static_cast<int>(lastDisplay)) {
+        std::cout << "⏰ Hero select timer: " << static_cast<int>(gameState->getPhaseTimer()) << "s" << std::endl;
+        lastDisplay = gameState->getPhaseTimer();
+    }
+    
     if (gameState->getPhaseTimer() <= 0 || gameState->areAllHeroesSelected()) {
+        std::cout << "⏰ Hero selection condition met. Timer: " << gameState->getPhaseTimer() 
+                  << ", All selected: " << (gameState->areAllHeroesSelected() ? "YES" : "NO") << std::endl;
+        
         // اگر تایمر تمام شده و برخی بازیکنان هیرو انتخاب نکرده‌اند، به طور تصادفی به آنها هیرو اختصاص بده
         if (!gameState->areAllHeroesSelected() && gameState->getPhaseTimer() <= 0) {
             std::cout << "⏰ Hero selection timer expired, assigning random heroes to remaining players" << std::endl;
             
+            // ابتدا لیست هیروهای قابل انتخاب را جمع‌آوری کن
+            std::vector<HeroType> availableHeroes;
+            for (int i = 0; i < 4; i++) { // 4 نوع هیرو داریم
+                availableHeroes.push_back(static_cast<HeroType>(i));
+            }
+            
+            // هیروهای انتخاب شده را از لیست حذف کن
+            for (const auto& player : gameState->getAllPlayers()) {
+                if (player->getHero()) {
+                    auto it = std::remove(availableHeroes.begin(), availableHeroes.end(), player->getHero()->getType());
+                    availableHeroes.erase(it, availableHeroes.end());
+                }
+            }
+            
+            std::cout << "🎭 Available heroes for random assignment: ";
+            for (auto h : availableHeroes) std::cout << static_cast<int>(h) << " ";
+            std::cout << std::endl;
+            
+            // به بازیکنان بدون هیرو، هیرو اختصاص بده
+            bool anyHeroAssigned = false;
             for (const auto& player : gameState->getAllPlayers()) {
                 if (!player->getHero()) {
-                    auto offer = gameState->getHeroOffer(player->getToken());
-                    if (!offer.empty()) {
-                        // انتخاب تصادفی یکی از هیروهای پیشنهادی
-                        std::uniform_int_distribution<> dist(0, offer.size() - 1);
-                        HeroType randomHero = offer[dist(gameState->getRNG())];
+                    if (!availableHeroes.empty()) {
+                        // انتخاب تصادفی از هیروهای موجود
+                        std::uniform_int_distribution<> dist(0, availableHeroes.size() - 1);
+                        HeroType randomHero = availableHeroes[dist(gameState->getRNG())];
                         
-                        gameState->selectHero(player->getToken(), randomHero);
+                        std::cout << "🎲 Attempting to assign hero " << static_cast<int>(randomHero) 
+                                  << " to " << player->getName() << std::endl;
+                        
+                        // از تابع selectHero استفاده نکن - مستقیم هیرو را تنظیم کن
+                        player->setHero(std::make_shared<Hero>(randomHero));
+                        
+                        // حذف هیرو از لیست موجود
+                        availableHeroes.erase(std::remove(availableHeroes.begin(), availableHeroes.end(), randomHero), 
+                                             availableHeroes.end());
                         
                         sendToPlayer(player->getToken(), {
                             {"type", "HERO_SELECTED"},
@@ -1940,16 +1945,56 @@ void GameServer::updateHeroSelectPhase(float delta) {
                             {"hero", static_cast<int>(randomHero)}
                         });
                         
-                        std::cout << "🎲 Random hero assigned to " << player->getName() 
+                        std::cout << "✅ Random hero assigned to " << player->getName() 
                                   << ": " << static_cast<int>(randomHero) << std::endl;
+                        
+                        anyHeroAssigned = true;
+                    } else {
+                        std::cout << "❌ No heroes available for " << player->getName() 
+                                  << " - all heroes already taken!" << std::endl;
+                        // اگر هیرویی موجود نیست، یکی از هیروهای تکراری بده (بر خلاف قوانین بازی اما برای ادامه بازی)
+                        HeroType fallbackHero = HeroType::SYLVANAS;
+                        player->setHero(std::make_shared<Hero>(fallbackHero));
+                        anyHeroAssigned = true;
                     }
                 }
+            }
+            
+            if (anyHeroAssigned) {
+                std::cout << "🔄 Updated hero selections, checking if all have heroes now..." << std::endl;
             }
         }
         
         // اطمینان از اینکه همه هیروها انتخاب شده‌اند
-        if (gameState->areAllHeroesSelected()) {
+        bool allHaveHeroes = true;
+        int withHero = 0, total = 0;
+        for (const auto& player : gameState->getAllPlayers()) {
+            total++;
+            if (player->getHero()) {
+                withHero++;
+            } else {
+                allHaveHeroes = false;
+                std::cout << "❌ Player " << player->getName() << " still has no hero!" << std::endl;
+            }
+        }
+        
+        std::cout << "📊 Hero selection status: " << withHero << "/" << total << " players have heroes" << std::endl;
+        
+        if (allHaveHeroes) {
             std::cout << "✅ All players have selected heroes, proceeding to recruit phase" << std::endl;
+            enterRecruitPhase();
+        } else if (gameState->getPhaseTimer() <= -5.0f) {
+            // اگر بیش از 5 ثانیه از پایان تایمر گذشته و هنوز هیروها انتخاب نشده‌اند، به زور ادامه بده
+            std::cout << "⚠️ Force proceeding to recruit phase despite incomplete hero selection" << std::endl;
+            
+            // به بازیکنان بدون هیرو، هیروی پیش‌فرض بده
+            for (const auto& player : gameState->getAllPlayers()) {
+                if (!player->getHero()) {
+                    player->setHero(std::make_shared<Hero>(HeroType::SYLVANAS));
+                    std::cout << "🚨 Force-assigned default hero to " << player->getName() << std::endl;
+                }
+            }
+            
             enterRecruitPhase();
         }
     }
@@ -2070,7 +2115,20 @@ void GameServer::enterRecruitPhase() {
                     std::uniform_int_distribution<> dist(0, offer.size() - 1);
                     HeroType randomHero = offer[dist(gameState->getRNG())];
                     
-                    gameState->selectHero(player->getToken(), randomHero);
+                    // اینجا اشکال دارد! باید مستقیماً هیرو را ست کنیم
+                    player->setHero(std::make_shared<Hero>(randomHero));
+                    
+                    // پیام انتخاب هیرو را برای این بازیکن ارسال کن
+                    sendToPlayer(player->getToken(), {
+                        {"type", "HERO_SELECTED"},
+                        {"hero", static_cast<int>(randomHero)}
+                    });
+                    
+                    broadcast({
+                        {"type", "PLAYER_HERO_SELECTED"},
+                        {"name", player->getName()},
+                        {"hero", static_cast<int>(randomHero)}
+                    });
                     
                     std::cout << "🎲 Forced hero assignment to " << player->getName() 
                               << ": " << static_cast<int>(randomHero) << std::endl;
@@ -2079,6 +2137,7 @@ void GameServer::enterRecruitPhase() {
         }
     }
     
+    // 🔴 مشکل اینجاست: این broadcast باید WAIT کند تا همه کلاینت‌ها پیام‌ها را دریافت کنند
     gameState->setPhase(GamePhase::RECRUIT);
     gameState->setPhaseTimer(TURN_DURATION);
     gameState->setGracePeriod(false);
@@ -2086,11 +2145,18 @@ void GameServer::enterRecruitPhase() {
     gameState->startTurnForAll();
     gameState->refreshAllShops();
     
+    // 🔴 اضافه کردن تاخیر بین ارسال پیام‌ها
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // ابتدا FULL_STATE را بفرست
     broadcast({
         {"type", "FULL_STATE"},
         {"data", gameState->toJson()}
     });
     
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    
+    // سپس PHASE_CHANGE را بفرست
     broadcast({
         {"type", "PHASE_CHANGE"},
         {"phase", "RECRUIT"},
@@ -2099,6 +2165,15 @@ void GameServer::enterRecruitPhase() {
     });
     
     std::cout << "🛒 Entered Recruit Phase (Turn " << gameState->getTurnNumber() << ")" << std::endl;
+    std::cout << "📤 Sent FULL_STATE and PHASE_CHANGE to all players" << std::endl;
+    
+    // 🔴 برای دیباگ: وضعیت همه بازیکنان را چاپ کن
+    for (const auto& player : gameState->getAllPlayers()) {
+        std::cout << "👤 Player " << player->getName() 
+                  << " - Hero: " << (player->getHero() ? player->getHero()->getName() : "None")
+                  << " - Gold: " << player->getGold()
+                  << " - Tier: " << player->getShop().getTavernTier() << std::endl;
+    }
 }
 
 void GameServer::enterCombatPhase() {
@@ -2321,7 +2396,7 @@ void GameServer::handleSelectHero(const json& action, std::shared_ptr<Player> pl
     }
     
     int heroTypeInt = action.value("hero", -1);
-    if (heroTypeInt < 0 || heroTypeInt >= 8) {
+    if (heroTypeInt < 0 || heroTypeInt >= 4) {
         sendToPlayer(player->getToken(), {
             {"type", "ERROR"},
             {"message", "Invalid hero selection"}

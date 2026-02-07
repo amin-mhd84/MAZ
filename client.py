@@ -63,10 +63,6 @@ class HeroType(Enum):
     LICH_KING = 1
     MILLHOUSE = 2
     YOGG = 3
-    PATCHES = 4
-    RAGNAROS = 5
-    KELTHUZAD = 6
-    MALGANIS = 7
 
     @staticmethod
     def from_int(value: int) -> 'HeroType':
@@ -95,11 +91,11 @@ class BaseHero:
         """بارگذاری تصویر هیرو"""
         try:
             self.portrait = pygame.image.load(image_path)
-            self.portrait = pygame.transform.scale(self.portrait, (100, 100))
+            self.portrait = pygame.transform.scale(self.portrait, (170,300))
         except Exception as e:
             print(f"❌ Error loading hero image {image_path}: {e}")
             # Create placeholder
-            self.portrait = pygame.Surface((100, 100))
+            self.portrait = pygame.Surface((170,300))
             self.portrait.fill((100, 100, 150))
             pygame.draw.rect(self.portrait, (200, 200, 200), (0, 0, 100, 100), 2)
             font = pygame.font.Font(None, 24)
@@ -230,43 +226,6 @@ class YoggSaron(BaseHero):
             tier_text = TINY_FONT.render(f"Current Tavern Tier: {self.current_tavern_tier}", True, (150, 220, 150))
             self.screen.blit(tier_text, (x + 10, y + height - 25))
 
-class Patches(BaseHero):
-    def __init__(self, screen, x, y):
-        super().__init__(screen, x, y, HeroType.PATCHES)
-        self.name = "Patches the Pirate"
-        self.hero_power_name = "Pirate's Greed"
-        self.hero_power_cost = 0
-        self.hero_power_description = "After you buy a Pirate, give it +1/+1."
-        self.is_passive = True
-        self.load_portrait("./bgknowhow-main/images/heroes/BG26_HERO_102_render_80.webp")
-
-class Ragnaros(BaseHero):
-    def __init__(self, screen, x, y):
-        super().__init__(screen, x, y, HeroType.RAGNAROS)
-        self.name = "Ragnaros the Firelord"
-        self.hero_power_name = "DIE, INSECT!"
-        self.hero_power_cost = 2
-        self.hero_power_description = "Deal 8 damage to two random enemy minions."
-        self.load_portrait("./bgknowhow-main/images/heroes/BG26_HERO_103_render_80.webp")
-
-class Kelthuzad(BaseHero):
-    def __init__(self, screen, x, y):
-        super().__init__(screen, x, y, HeroType.KELTHUZAD)
-        self.name = "Kel'Thuzad"
-        self.hero_power_name = "HARVEST TIME!"
-        self.hero_power_cost = 1
-        self.hero_power_description = "Give a friendly minion 'Deathrattle: Summon a 1/1 Skeleton.'"
-        self.load_portrait("./bgknowhow-main/images/heroes/BG26_HERO_104_render_80.webp")
-
-class Malganis(BaseHero):
-    def __init__(self, screen, x, y):
-        super().__init__(screen, x, y, HeroType.MALGANIS)
-        self.name = "Mal'Ganis"
-        self.hero_power_name = "Grasp of Mal'Ganis"
-        self.hero_power_cost = 1
-        self.hero_power_description = "Give a friendly Demon +2/+2."
-        self.load_portrait("./bgknowhow-main/images/heroes/BG26_HERO_105_render_80.webp")
-
 class HeroFactory:
     """Factory class for creating hero instances"""
     
@@ -281,14 +240,6 @@ class HeroFactory:
             return MillhouseManastorm(screen, x, y)
         elif hero_type == HeroType.YOGG:
             return YoggSaron(screen, x, y)
-        elif hero_type == HeroType.PATCHES:
-            return Patches(screen, x, y)
-        elif hero_type == HeroType.RAGNAROS:
-            return Ragnaros(screen, x, y)
-        elif hero_type == HeroType.KELTHUZAD:
-            return Kelthuzad(screen, x, y)
-        elif hero_type == HeroType.MALGANIS:
-            return Malganis(screen, x, y)
         else:
             # Return default hero
             return Sylvanas(screen, x, y)
@@ -654,127 +605,162 @@ class GameClient:
             print("❌ Failed to connect to server")
             return False
     
-    def handle_message(self, message):
-        """Handle incoming WebSocket messages"""
-        msg_type = message.get("type")
+def handle_message(self, message):
+    """Handle incoming WebSocket messages"""
+    msg_type = message.get("type")
+    
+    print(f"📥 Received message type: {msg_type}")  # 🔴 اضافه کردن برای دیباگ
+    
+    if msg_type == "WELCOME":
+        print("✅ Connected to game server")
         
-        if msg_type == "WELCOME":
-            print("✅ Connected to game server")
-            
-        elif msg_type == "JOIN_SUCCESS":
-            print(f"✅ Joined successfully as {self.player_name}")
-            
-        elif msg_type == "PLAYER_JOINED":
-            player_name = message.get("name")
-            player_count = message.get("player_count")
-            print(f"👤 {player_name} joined the game ({player_count}/4)")
-            
-        elif msg_type == "PLAYER_READY":
-            player_name = message.get("name")
-            ready = message.get("ready")
-            status = "ready" if ready else "not ready"
-            print(f"✅ {player_name} is {status}")
-            
-        elif msg_type == "HERO_OFFER":
-            self.hero_offer = [HeroType.from_int(h) for h in message.get("heroes", [])]
-            self.current_phase = GamePhase.HERO_SELECT
-            self.phase_timer = message.get("time", 15)
-            self.selected_hero = None  # ریست انتخاب قبلی
-            self.hero_instances = []  # پاک کردن لیست قبلی
-            
-            print(f"🎭 Hero selection started with {len(self.hero_offer)} heroes: {[h.name for h in self.hero_offer]}")
-            
-            # ایجاد نمونه‌های هیرو برای نمایش
-            num_heroes = len(self.hero_offer)
-            total_width = num_heroes * 150  # 140 width + 10 spacing
-            start_x = (SCREEN_WIDTH - total_width) // 2
-            
-            for i, hero_type in enumerate(self.hero_offer):
-                hero = HeroFactory.create_hero(hero_type, self.screen)
-                hero.x = start_x + i * 150
-                hero.y = SCREEN_HEIGHT // 2 - 100
-                hero.selected = (self.selected_hero == hero_type)
-                self.hero_instances.append(hero)
-            
-        elif msg_type == "HERO_SELECTED":
-            hero_type = HeroType.from_int(message.get("hero"))
-            print(f"🎭 Hero selected: {hero_type.name}")
-            
-            # آپدیت وضعیت انتخاب
-            self.selected_hero = hero_type
-            for hero in self.hero_instances:
-                hero.selected = (hero.hero_type == hero_type)
-            
-        elif msg_type == "PLAYER_HERO_SELECTED":
-            player_name = message.get("name")
-            hero_type = HeroType.from_int(message.get("hero"))
-            print(f"🎭 {player_name} selected {hero_type.name}")
-            
-        elif msg_type == "FULL_STATE":
-            self.update_game_state(message.get("data", {}))
-            
-        elif msg_type == "PHASE_CHANGE":
-            phase = message.get("phase")
+    elif msg_type == "JOIN_SUCCESS":
+        print(f"✅ Joined successfully as {self.player_name}")
+        # آپدیت نام در کلاینت
+        if "name" in message:
+            self.player_name = message["name"]
+        
+    elif msg_type == "PLAYER_JOINED":
+        player_name = message.get("name")
+        player_count = message.get("player_count")
+        print(f"👤 {player_name} joined the game ({player_count}/4)")
+        
+    elif msg_type == "PLAYER_READY":
+        player_name = message.get("name")
+        ready = message.get("ready")
+        status = "ready" if ready else "not ready"
+        print(f"✅ {player_name} is {status}")
+        
+    elif msg_type == "HERO_OFFER":
+        print("🎭 Received HERO_OFFER message")
+        hero_ids = message.get("heroes", [])
+        self.hero_offer = [HeroType.from_int(h) for h in hero_ids]
+        self.current_phase = GamePhase.HERO_SELECT
+        self.phase_timer = message.get("time", 15)
+        self.selected_hero = None  # ریست انتخاب قبلی
+        self.hero_instances = []  # پاک کردن لیست قبلی
+        
+        print(f"🎭 Hero selection started with {len(self.hero_offer)} heroes: {[h.name for h in self.hero_offer]}")
+        
+        # ایجاد نمونه‌های هیرو برای نمایش
+        num_heroes = len(self.hero_offer)
+        total_width = num_heroes * 150  # 140 width + 10 spacing
+        start_x = (SCREEN_WIDTH - total_width) // 2
+        
+        for i, hero_type in enumerate(self.hero_offer):
+            hero = HeroFactory.create_hero(hero_type, self.screen)
+            hero.x = start_x + i * 150
+            hero.y = SCREEN_HEIGHT // 2 - 100
+            hero.selected = (self.selected_hero == hero_type)
+            self.hero_instances.append(hero)
+        
+    elif msg_type == "HERO_SELECTED":
+        hero_type = HeroType.from_int(message.get("hero"))
+        print(f"🎭 Hero selected: {hero_type.name}")
+        
+        # آپدیت وضعیت انتخاب
+        self.selected_hero = hero_type
+        for hero in self.hero_instances:
+            hero.selected = (hero.hero_type == hero_type)
+        
+    elif msg_type == "PLAYER_HERO_SELECTED":
+        player_name = message.get("name")
+        hero_type = HeroType.from_int(message.get("hero"))
+        print(f"🎭 {player_name} selected {hero_type.name}")
+        
+    elif msg_type == "FULL_STATE":
+        print("📦 Received FULL_STATE message")  # 🔴 اضافه کردن
+        data = message.get("data", {})
+        phase_str = data.get("phase", "LOBBY")
+        print(f"📦 Phase in FULL_STATE: {phase_str}")  # 🔴 اضافه کردن
+        self.update_game_state(data)
+        
+    elif msg_type == "PHASE_CHANGE":
+        phase = message.get("phase")
+        print(f"🔄 Phase changed to: {phase}")  # 🔴 این خط باید اجرا شود
+        
+        try:
             self.current_phase = GamePhase(phase)
             self.phase_timer = message.get("time", 30)
-            print(f"🔄 Phase changed to: {phase}")
+            print(f"🔄 Successfully changed phase to: {phase}")
             
-        elif msg_type == "BUY_SUCCESS":
-            print("🛒 Minion bought successfully")
-            
-        elif msg_type == "SELL_SUCCESS":
-            print("💰 Minion sold successfully")
-            
-        elif msg_type == "PLAY_SUCCESS":
-            print("🎮 Minion played successfully")
-            
-        elif msg_type == "REFRESH_SUCCESS":
-            print("🔄 Shop refreshed")
-            
-        elif msg_type == "UPGRADE_SUCCESS":
-            print("📈 Tavern upgraded")
-            
-        elif msg_type == "FREEZE_SUCCESS":
-            frozen = message.get("frozen")
-            print(f"❄️ Shop {'frozen' if frozen else 'unfrozen'}")
-            
-        elif msg_type == "TURN_ENDED":
-            print("⏹️ Turn ended")
-            
-        elif msg_type == "HERO_POWER_USED":
-            print("✨ Hero power used")
-            
-        elif msg_type == "COMBAT_RESULT":
-            result = message.get("result")
-            if result == "WIN":
-                print("⚔️ You won the combat!")
-            elif result == "LOSE":
-                print("💀 You lost the combat")
-            elif result == "BYE":
-                print("😴 No opponent this round")
-            
-        elif msg_type == "GAME_OVER":
-            self.game_over_data = message
-            self.current_phase = GamePhase.GAME_OVER
-            print("🏆 Game Over!")
-            
-        elif msg_type == "ERROR":
-            error_msg = message.get("message", "Unknown error")
-            print(f"❌ Error: {error_msg}")
-            
-        elif msg_type == "GRACE_PERIOD":
-            print("⏰ Grace period started - finish your actions!")
-            
-        elif msg_type == "RECONNECT_SUCCESS":
-            print("🔁 Reconnected successfully")
-            self.update_game_state(message.get("full_state", {}))
-            
-        elif msg_type == "PONG":
+            # اگر به فاز RECRUIT رفتیم، hero selection رو پاک کن
+            if phase == "RECRUIT":
+                self.hero_offer = []
+                self.hero_instances = []
+                print("🔄 Cleared hero selection UI for recruit phase")
+                
+        except Exception as e:
+            print(f"❌ Error changing phase to {phase}: {e}")
+            # Fallback: اگر phase معتبر نیست، از FULL_STATE استفاده کن
+            if self.player_data:
+                # منتظر FULL_STATE بمان
+                pass
+        
+    elif msg_type == "BUY_SUCCESS":
+        print("🛒 Minion bought successfully")
+        # آپدیت game state از طریق FULL_STATE
+        
+    elif msg_type == "SELL_SUCCESS":
+        print("💰 Minion sold successfully")
+        
+    elif msg_type == "PLAY_SUCCESS":
+        print("🎮 Minion played successfully")
+        
+    elif msg_type == "REFRESH_SUCCESS":
+        print("🔄 Shop refreshed")
+        
+    elif msg_type == "UPGRADE_SUCCESS":
+        print("📈 Tavern upgraded")
+        
+    elif msg_type == "FREEZE_SUCCESS":
+        frozen = message.get("frozen")
+        print(f"❄️ Shop {'frozen' if frozen else 'unfrozen'}")
+        
+    elif msg_type == "TURN_ENDED":
+        print("⏹️ Turn ended")
+        
+    elif msg_type == "HERO_POWER_USED":
+        print("✨ Hero power used")
+        
+    elif msg_type == "COMBAT_RESULT":
+        result = message.get("result")
+        if result == "WIN":
+            print("⚔️ You won the combat!")
+        elif result == "LOSE":
+            print("💀 You lost the combat")
+        elif result == "BYE":
+            print("😴 No opponent this round")
+        
+    elif msg_type == "GAME_OVER":
+        self.game_over_data = message
+        self.current_phase = GamePhase.GAME_OVER
+        winner = message.get("winner", "Unknown")
+        print(f"🏆 Game Over! Winner: {winner}")
+        
+    elif msg_type == "ERROR":
+        error_msg = message.get("message", "Unknown error")
+        print(f"❌ Error: {error_msg}")
+        
+    elif msg_type == "GRACE_PERIOD":
+        print("⏰ Grace period started - finish your actions!")
+        
+    elif msg_type == "RECONNECT_SUCCESS":
+        print("🔁 Reconnected successfully")
+        # آپدیت state از سرور
+        if "full_state" in message:
+            self.update_game_state(message["full_state"])
+        if "player_state" in message:
+            # آپدیت state بازیکن خاص
             pass
             
-        else:
-            print(f"⚠️ Unknown message type: {msg_type}")
-    
+    elif msg_type == "PONG":
+        # فقط keep-alive
+        pass
+        
+    else:
+        print(f"⚠️ Unknown message type: {msg_type}")
+        print(f"📄 Full message: {json.dumps(message, indent=2)}")
     def update_game_state(self, state_data):
         """Update the game state from server data"""
         try:
